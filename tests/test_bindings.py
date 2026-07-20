@@ -1,8 +1,8 @@
-"""Tests for fastfields_bind. Runnable via `pytest` or `python tests/test_bindings.py`."""
+"""Tests for fastfields.dlpack. Runnable via `pytest` or `python tests/test_bindings.py`."""
 
 import numpy as np
 
-import fastfields_bind as ff
+import fastfields.dlpack as ff
 
 
 def _edt_reference(inp, voxel_spacing, cost):

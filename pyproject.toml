@@ -3,9 +3,9 @@ requires = ["setuptools>=64", "wheel", "nanobind>=1.9", "numpy"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fastfields-bind"
+name = "fastfields-dlpack"
 version = "0.1.0"
-description = "nanobind bindings from DLPack to the fastfields-lib C++ library"
+description = "nanobind bindings from DLPack to the fastfields-lib C++ library (fastfields.dlpack)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -15,8 +15,13 @@ dependencies = []
 [project.optional-dependencies]
 test = ["numpy", "pytest"]
 
+# Explicit single-package listing: only the ``fastfields.dlpack`` subpackage is
+# shipped. Crucially, no ``fastfields/__init__.py`` is created or packaged, so
+# ``fastfields`` stays a PEP 420 native namespace package that other
+# distributions (fastfields-numpy, fastfields-torch, fastfields-cupy,
+# fastfields) can merge into.
 [tool.setuptools]
-packages = ["fastfields_bind"]
+packages = ["fastfields.dlpack"]
 
 [tool.setuptools.package-data]
-fastfields_bind = ["lib/*.so", "lib/*.dylib", "lib/*.dll"]
+"fastfields.dlpack" = ["lib/*.so", "lib/*.dylib", "lib/*.dll"]

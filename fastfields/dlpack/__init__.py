@@ -1,4 +1,4 @@
-"""fastfields_bind: nanobind bindings from DLPack to the fastfields-lib C++ library.
+"""fastfields.dlpack: nanobind bindings from DLPack to the fastfields-lib C++ library.
 
 All functions accept any array object exposing ``__dlpack__`` (numpy, torch,
 cupy, ...). Tensors marked in-place / as outputs are written through their

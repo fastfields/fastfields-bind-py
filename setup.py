@@ -7,8 +7,11 @@ Custom build_ext that:
      ./fastfields, linking -lfastfields with an $ORIGIN/lib rpath,
   4. ships the .so libraries as package data.
 
-./fastfields is treated as the fastfields-lib source tree; it works whether
-that path is a symlink (dev) or a git submodule (release).
+./_fastfields_lib is treated as the fastfields-lib source tree; it works whether
+that path is a symlink (dev) or a git submodule (release). The Python package it
+builds is the PEP 420 namespace subpackage ``fastfields.dlpack`` (the compiled
+extension imports as ``fastfields.dlpack._core``); no ``fastfields/__init__.py``
+is created, so other distributions can merge into the same ``fastfields`` namespace.
 """
 
 from __future__ import annotations
@@ -23,9 +26,9 @@ from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-FASTFIELDS_DIR = os.path.join(HERE, "fastfields")
+FASTFIELDS_DIR = os.path.join(HERE, "_fastfields_lib")
 FASTFIELDS_BUILD = os.path.join(FASTFIELDS_DIR, "build")
-PKG_DIR = os.path.join(HERE, "fastfields_bind")
+PKG_DIR = os.path.join(HERE, "fastfields", "dlpack")
 PKG_LIB_DIR = os.path.join(PKG_DIR, "lib")
 
 # Shared libraries produced by the fastfields-lib Makefile.
@@ -79,7 +82,7 @@ class BuildExt(build_ext):
             shutil.copymode(src, dst)
         # Mirror into the build tree so a wheel build also picks them up.
         if getattr(self, "build_lib", None):
-            build_pkg_lib = os.path.join(self.build_lib, "fastfields_bind", "lib")
+            build_pkg_lib = os.path.join(self.build_lib, "fastfields", "dlpack", "lib")
             os.makedirs(build_pkg_lib, exist_ok=True)
             for name in (MAIN_LIB, CPU_LIB):
                 shutil.copyfile(
@@ -135,7 +138,7 @@ class BuildExt(build_ext):
 
 ext_modules = [
     Extension(
-        "fastfields_bind._core",
+        "fastfields.dlpack._core",
         sources=[os.path.join("src", "ext.cpp")],
     )
 ]
