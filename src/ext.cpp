@@ -1,0 +1,316 @@
+// nanobind bindings for fastfields-lib.
+//
+// We accept untyped `nb::ndarray<>` arguments: nanobind auto-imports any
+// object exposing `__dlpack__` (numpy / torch / cupy / ...). Each ndarray is
+// converted to a DLTensor with `to_dltensor` and handed to the C++ library,
+// which operates in place / writes outputs through the DLTensor pointers.
+//
+// NOTE on symbol namespaces (fastfields-lib quirk): resize.cpp / restrict.cpp
+// / splinc.cpp correctly define their dispatchers inside `namespace ff`, so
+// they are linked as `ff::resample`, `ff::restriction`, `ff::spline_coeff`
+// (picked up from the included headers). distance.cpp and posdef.cpp instead
+// do `using namespace FF;` and then define the functions at *global* scope,
+// which (per C++ rules) emits them in the GLOBAL namespace rather than `ff::`.
+// We therefore declare those 14 dispatchers ourselves at global scope below so
+// we bind to the symbols that actually exist in libfastfields.so.
+
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
+
+#include <cstdint>
+#include <cstring>
+#include <optional>
+#include <vector>
+
+// We deliberately do NOT include distance.h / posdef.h: (a) their dispatchers
+// are actually emitted at global scope (see note above), so we declare them
+// ourselves below, and (b) distance.h re-defines the bound_t/spline_t enums
+// *without* the FF_LIB_BOUND_SPLINE_T include guard that the resize/restrict/
+// splinc headers use, which would clash. These three guard-cooperating headers
+// pull in dlpack.h (DLTensor) and give us the correctly-namespaced
+// ff::resample / ff::restriction / ff::spline_coeff declarations.
+#include "resize.h"     // ff::resample  + dlpack.h (DLTensor)
+#include "restrict.h"   // ff::restriction
+#include "splinc.h"     // ff::spline_coeff
+
+namespace nb = nanobind;
+using namespace nb::literals;
+using arr = nb::ndarray<>;
+
+// ---------------------------------------------------------------------------
+// Global-namespace declarations mirroring distance.h / posdef.h. These match
+// the symbols actually emitted by distance.cpp / posdef.cpp.
+// ---------------------------------------------------------------------------
+void dt_euclidean(DLTensor &, double, int);
+void dt_l1(DLTensor &, double, int);
+void dt_spline_table(DLTensor &, DLTensor &, const DLTensor &, const DLTensor &,
+                     const DLTensor &, int8_t, int8_t, int);
+void dt_spline_brent(DLTensor &, DLTensor &, const DLTensor &, const DLTensor &,
+                     int64_t, double, double, int8_t, int8_t, int);
+void dt_spline_gaussnewton(DLTensor &, DLTensor &, const DLTensor &,
+                           const DLTensor &, int64_t, double, int8_t, int8_t,
+                           int);
+void dt_mesh(DLTensor &, DLTensor &, const DLTensor &, const DLTensor &,
+             const DLTensor &, bool, bool, int);
+void sym_matvec(DLTensor &, const DLTensor &, const DLTensor &, int);
+void sym_matvec_backward(DLTensor &, const DLTensor &, const DLTensor &, int);
+void sym_addmatvec_(DLTensor &, const DLTensor &, const DLTensor &, int);
+void sym_submatvec_(DLTensor &, const DLTensor &, const DLTensor &, int);
+void sym_solve(DLTensor &, const DLTensor &, const DLTensor &, const DLTensor &,
+               int);
+void sym_solve_(DLTensor &, const DLTensor &, const DLTensor &, int);
+void sym_invert(DLTensor &, const DLTensor &, int);
+void sym_invert_(DLTensor &, int);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Fill a DLTensor that views the memory of a nanobind ndarray. The shape and
+// stride pointers alias nanobind's internal storage, which stays alive for the
+// duration of the wrapped call (the ndarray argument outlives it), so no copy
+// is required. Strides are already in elements (DLPack convention).
+static DLTensor to_dltensor(arr &a) {
+    DLTensor t;
+    std::memset(&t, 0, sizeof(t));
+    t.data = a.data_handle();
+    t.device.device_type = (DLDeviceType)a.device_type();
+    t.device.device_id = a.device_id();
+    t.ndim = (int32_t)a.ndim();
+    t.dtype.code = a.dtype().code;
+    t.dtype.bits = a.dtype().bits;
+    t.dtype.lanes = a.dtype().lanes;
+    t.shape = const_cast<int64_t *>(a.shape_ptr());
+    t.strides = const_cast<int64_t *>(a.stride_ptr());
+    t.byte_offset = 0;
+    return t;
+}
+
+// A DLTensor with null data: the library treats this as "absent" for the
+// optional weight (posdef) and nearest_vertex (mesh) arguments.
+static DLTensor null_dltensor() {
+    DLTensor t;
+    std::memset(&t, 0, sizeof(t));
+    t.data = nullptr;
+    return t;
+}
+
+static DLTensor opt_to_dltensor(std::optional<arr> &a) {
+    return a.has_value() ? to_dltensor(*a) : null_dltensor();
+}
+
+// ---------------------------------------------------------------------------
+// Module
+// ---------------------------------------------------------------------------
+NB_MODULE(_core, m) {
+    m.doc() = "nanobind bindings to fastfields-lib (DLPack in/out).\n"
+              "Arrays may be any object exposing __dlpack__ (numpy/torch/cupy).\n"
+              "spline order: 0=Nearest 1=Linear 2=Quadratic 3=Cubic ... 7.\n"
+              "bound: 0=Zero 1=Replicate 2=DCT1 3=DCT2 4=DST1 5=DST2 6=DFT 7=NoCheck.";
+
+    // ----- distance.h -----
+    m.def(
+        "dt_euclidean",
+        [](arr inp_out, double voxel_spacing, int stream) {
+            DLTensor t = to_dltensor(inp_out);
+            ::dt_euclidean(t, voxel_spacing, stream);
+        },
+        "inp_out"_a, "voxel_spacing"_a = 1.0, "stream"_a = 0,
+        "In-place Euclidean distance transform along the last axis "
+        "(float32/float64; 0 at features, +inf elsewhere).");
+
+    m.def(
+        "dt_l1",
+        [](arr inp_out, double voxel_spacing, int stream) {
+            DLTensor t = to_dltensor(inp_out);
+            ::dt_l1(t, voxel_spacing, stream);
+        },
+        "inp_out"_a, "voxel_spacing"_a = 1.0, "stream"_a = 0,
+        "In-place L1 distance transform along the last axis.");
+
+    m.def(
+        "dt_spline_table",
+        [](arr time, arr dist, arr loc, arr coeff, arr times, int8_t spline,
+           int8_t bound, int stream) {
+            DLTensor t = to_dltensor(time), d = to_dltensor(dist),
+                     l = to_dltensor(loc), c = to_dltensor(coeff),
+                     ts = to_dltensor(times);
+            ::dt_spline_table(t, d, l, c, ts, spline, bound, stream);
+        },
+        "time"_a, "dist"_a, "loc"_a, "coeff"_a, "times"_a, "spline"_a = 3,
+        "bound"_a = 3, "stream"_a = 0,
+        "Point-to-spline distance via a dictionary of candidate times.");
+
+    m.def(
+        "dt_spline_brent",
+        [](arr time, arr dist, arr loc, arr coeff, int64_t max_iter, double tol,
+           double step, int8_t spline, int8_t bound, int stream) {
+            DLTensor t = to_dltensor(time), d = to_dltensor(dist),
+                     l = to_dltensor(loc), c = to_dltensor(coeff);
+            ::dt_spline_brent(t, d, l, c, max_iter, tol, step, spline, bound,
+                              stream);
+        },
+        "time"_a, "dist"_a, "loc"_a, "coeff"_a, "max_iter"_a, "tol"_a, "step"_a,
+        "spline"_a = 3, "bound"_a = 3, "stream"_a = 0,
+        "Point-to-spline distance via Brent's method.");
+
+    m.def(
+        "dt_spline_gaussnewton",
+        [](arr time, arr dist, arr loc, arr coeff, int64_t max_iter, double tol,
+           int8_t spline, int8_t bound, int stream) {
+            DLTensor t = to_dltensor(time), d = to_dltensor(dist),
+                     l = to_dltensor(loc), c = to_dltensor(coeff);
+            ::dt_spline_gaussnewton(t, d, l, c, max_iter, tol, spline, bound,
+                                    stream);
+        },
+        "time"_a, "dist"_a, "loc"_a, "coeff"_a, "max_iter"_a, "tol"_a,
+        "spline"_a = 3, "bound"_a = 3, "stream"_a = 0,
+        "Point-to-spline distance via Gauss-Newton optimization.");
+
+    m.def(
+        "dt_mesh",
+        [](arr dist, std::optional<arr> nearest_vertex, arr loc, arr vertices,
+           arr faces, bool signed_, bool naive, int stream) {
+            DLTensor d = to_dltensor(dist);
+            DLTensor nv = opt_to_dltensor(nearest_vertex);
+            DLTensor l = to_dltensor(loc), v = to_dltensor(vertices),
+                     f = to_dltensor(faces);
+            ::dt_mesh(d, nv, l, v, f, signed_, naive, stream);
+        },
+        "dist"_a, "nearest_vertex"_a.none() = nb::none(), "loc"_a, "vertices"_a,
+        "faces"_a, "signed_"_a = true, "naive"_a = false, "stream"_a = 0,
+        "Point-to-triangular-mesh (squared) distance; nearest_vertex optional.");
+
+    // ----- posdef.h -----
+    m.def(
+        "sym_matvec",
+        [](arr out, arr hessian, arr inp, int stream) {
+            DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
+                     i = to_dltensor(inp);
+            ::sym_matvec(o, h, i, stream);
+        },
+        "out"_a, "hessian"_a, "inp"_a, "stream"_a = 0,
+        "out = H @ inp (H is compact-symmetric, diagonal-then-rows packed).");
+
+    m.def(
+        "sym_matvec_backward",
+        [](arr out, arr grd, arr inp, int stream) {
+            DLTensor o = to_dltensor(out), g = to_dltensor(grd),
+                     i = to_dltensor(inp);
+            ::sym_matvec_backward(o, g, i, stream);
+        },
+        "out"_a, "grd"_a, "inp"_a, "stream"_a = 0,
+        "Backward of sym_matvec wrt the matrix.");
+
+    m.def(
+        "sym_addmatvec_",
+        [](arr out, arr hessian, arr inp, int stream) {
+            DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
+                     i = to_dltensor(inp);
+            ::sym_addmatvec_(o, h, i, stream);
+        },
+        "out"_a, "hessian"_a, "inp"_a, "stream"_a = 0, "out += H @ inp.");
+
+    m.def(
+        "sym_submatvec_",
+        [](arr out, arr hessian, arr inp, int stream) {
+            DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
+                     i = to_dltensor(inp);
+            ::sym_submatvec_(o, h, i, stream);
+        },
+        "out"_a, "hessian"_a, "inp"_a, "stream"_a = 0, "out -= H @ inp.");
+
+    m.def(
+        "sym_solve",
+        [](arr out, arr hessian, arr inp, std::optional<arr> weight,
+           int stream) {
+            DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
+                     i = to_dltensor(inp);
+            DLTensor w = opt_to_dltensor(weight);
+            ::sym_solve(o, h, i, w, stream);
+        },
+        "out"_a, "hessian"_a, "inp"_a, "weight"_a.none() = nb::none(),
+        "stream"_a = 0, "out = (H + diag(weight)) \\ inp (weight optional).");
+
+    m.def(
+        "sym_solve_",
+        [](arr inp_out, arr hessian, std::optional<arr> weight, int stream) {
+            DLTensor io = to_dltensor(inp_out), h = to_dltensor(hessian);
+            DLTensor w = opt_to_dltensor(weight);
+            ::sym_solve_(io, h, w, stream);
+        },
+        "inp_out"_a, "hessian"_a, "weight"_a.none() = nb::none(),
+        "stream"_a = 0,
+        "In-place: inp_out = (H + diag(weight)) \\ inp_out (weight optional).");
+
+    m.def(
+        "sym_invert",
+        [](arr out, arr hessian, int stream) {
+            DLTensor o = to_dltensor(out), h = to_dltensor(hessian);
+            ::sym_invert(o, h, stream);
+        },
+        "out"_a, "hessian"_a, "stream"_a = 0,
+        "out = inv(H) (both compact-symmetric).");
+
+    m.def(
+        "sym_invert_",
+        [](arr hessian, int stream) {
+            DLTensor h = to_dltensor(hessian);
+            ::sym_invert_(h, stream);
+        },
+        "hessian"_a, "stream"_a = 0,
+        "In-place: hessian = inv(hessian) (compact-symmetric).");
+
+    // ----- resize.h / restrict.h (scale as a Python sequence) -----
+    auto resize_like = [](arr &out, arr &inp, int8_t spline, int8_t bound,
+                          double shift, std::optional<std::vector<double>> &scale,
+                          int ndim, int stream, bool restriction) {
+        DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+        const double *scale_ptr = nullptr;
+        if (scale.has_value() && !scale->empty())
+            scale_ptr = scale->data();
+        if (restriction)
+            ff::restriction(o, i, spline, bound, shift, scale_ptr, ndim, stream);
+        else
+            ff::resample(o, i, spline, bound, shift, scale_ptr, ndim, stream);
+    };
+
+    m.def(
+        "resample",
+        [resize_like](arr out, arr inp, int8_t spline, int8_t bound,
+                      double shift, std::optional<std::vector<double>> scale,
+                      int ndim, int stream) {
+            resize_like(out, inp, spline, bound, shift, scale, ndim, stream,
+                        false);
+        },
+        "out"_a, "inp"_a, "spline"_a = 2, "bound"_a = 3, "shift"_a = 0.0,
+        "scale"_a.none() = nb::none(), "ndim"_a = 1, "stream"_a = 0,
+        "Spline resample (prolongation). scale is a per-dim sequence of length "
+        "ndim (input-index per output-index).");
+
+    m.def(
+        "restriction",
+        [resize_like](arr out, arr inp, int8_t spline, int8_t bound,
+                      double shift, std::optional<std::vector<double>> scale,
+                      int ndim, int stream) {
+            resize_like(out, inp, spline, bound, shift, scale, ndim, stream,
+                        true);
+        },
+        "out"_a, "inp"_a, "spline"_a = 2, "bound"_a = 3, "shift"_a = 0.0,
+        "scale"_a.none() = nb::none(), "ndim"_a = 1, "stream"_a = 0,
+        "Restriction (adjoint of resample). out is accumulated into and must be "
+        "pre-zeroed by the caller.");
+
+    // ----- splinc.h -----
+    m.def(
+        "spline_coeff",
+        [](arr inp_out, int8_t spline, int8_t bound, int stream) {
+            DLTensor t = to_dltensor(inp_out);
+            ff::spline_coeff(t, spline, bound, stream);
+        },
+        "inp_out"_a, "spline"_a = 3, "bound"_a = 3, "stream"_a = 0,
+        "In-place spline-coefficient prefilter along the last axis "
+        "(orders 0/1 are no-ops).");
+}

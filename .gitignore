@@ -1,0 +1,19 @@
+# Python build artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+
+# Compiled extension modules (built in-place by setup.py)
+/fastfields_bind/_core*.so
+/fastfields_bind/_core*.pyd
+
+# Shipped native libs are generated at build time; do NOT track them.
+# (The lib/ directory convention itself is documented and recreated by setup.py.)
+/fastfields_bind/lib/
+
+# fastfields-lib's own build tree (when ./fastfields is a checkout/submodule)
+/fastfields/build/

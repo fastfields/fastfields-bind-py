@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64", "wheel", "nanobind>=1.9", "numpy"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fastfields-bind"
+version = "0.1.0"
+description = "nanobind bindings from DLPack to the fastfields-lib C++ library"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "fastfields" }]
+dependencies = []
+
+[project.optional-dependencies]
+test = ["numpy", "pytest"]
+
+[tool.setuptools]
+packages = ["fastfields_bind"]
+
+[tool.setuptools.package-data]
+fastfields_bind = ["lib/*.so", "lib/*.dylib", "lib/*.dll"]
