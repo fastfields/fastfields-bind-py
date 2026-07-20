@@ -5,15 +5,6 @@
 // converted to a DLTensor with `to_dltensor` and handed to the C++ library,
 // which operates in place / writes outputs through the DLTensor pointers.
 //
-// NOTE on symbol namespaces (fastfields-lib quirk): resize.cpp / restrict.cpp
-// / splinc.cpp correctly define their dispatchers inside `namespace ff`, so
-// they are linked as `ff::resample`, `ff::restriction`, `ff::spline_coeff`
-// (picked up from the included headers). distance.cpp and posdef.cpp instead
-// do `using namespace FF;` and then define the functions at *global* scope,
-// which (per C++ rules) emits them in the GLOBAL namespace rather than `ff::`.
-// We therefore declare those 14 dispatchers ourselves at global scope below so
-// we bind to the symbols that actually exist in libfastfields.so.
-
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
@@ -24,13 +15,10 @@
 #include <optional>
 #include <vector>
 
-// We deliberately do NOT include distance.h / posdef.h: (a) their dispatchers
-// are actually emitted at global scope (see note above), so we declare them
-// ourselves below, and (b) distance.h re-defines the bound_t/spline_t enums
-// *without* the FF_LIB_BOUND_SPLINE_T include guard that the resize/restrict/
-// splinc headers use, which would clash. These three guard-cooperating headers
-// pull in dlpack.h (DLTensor) and give us the correctly-namespaced
-// ff::resample / ff::restriction / ff::spline_coeff declarations.
+// All five public headers share the FF_LIB_BOUND_SPLINE_T guard, so they
+// co-include cleanly and provide the correctly-namespaced ff:: declarations.
+#include "distance.h"   // ff::dt_euclidean / dt_l1 / dt_spline_* / dt_mesh
+#include "posdef.h"     // ff::sym_matvec / sym_solve / sym_invert / ...
 #include "resize.h"     // ff::resample  + dlpack.h (DLTensor)
 #include "restrict.h"   // ff::restriction
 #include "splinc.h"     // ff::spline_coeff
@@ -38,31 +26,6 @@
 namespace nb = nanobind;
 using namespace nb::literals;
 using arr = nb::ndarray<>;
-
-// ---------------------------------------------------------------------------
-// Global-namespace declarations mirroring distance.h / posdef.h. These match
-// the symbols actually emitted by distance.cpp / posdef.cpp.
-// ---------------------------------------------------------------------------
-void dt_euclidean(DLTensor &, double, int);
-void dt_l1(DLTensor &, double, int);
-void dt_spline_table(DLTensor &, DLTensor &, const DLTensor &, const DLTensor &,
-                     const DLTensor &, int8_t, int8_t, int);
-void dt_spline_brent(DLTensor &, DLTensor &, const DLTensor &, const DLTensor &,
-                     int64_t, double, double, int8_t, int8_t, int);
-void dt_spline_gaussnewton(DLTensor &, DLTensor &, const DLTensor &,
-                           const DLTensor &, int64_t, double, int8_t, int8_t,
-                           int);
-void dt_mesh(DLTensor &, DLTensor &, const DLTensor &, const DLTensor &,
-             const DLTensor &, bool, bool, int);
-void sym_matvec(DLTensor &, const DLTensor &, const DLTensor &, int);
-void sym_matvec_backward(DLTensor &, const DLTensor &, const DLTensor &, int);
-void sym_addmatvec_(DLTensor &, const DLTensor &, const DLTensor &, int);
-void sym_submatvec_(DLTensor &, const DLTensor &, const DLTensor &, int);
-void sym_solve(DLTensor &, const DLTensor &, const DLTensor &, const DLTensor &,
-               int);
-void sym_solve_(DLTensor &, const DLTensor &, const DLTensor &, int);
-void sym_invert(DLTensor &, const DLTensor &, int);
-void sym_invert_(DLTensor &, int);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -115,7 +78,7 @@ NB_MODULE(_core, m) {
         "dt_euclidean",
         [](arr inp_out, double voxel_spacing, int stream) {
             DLTensor t = to_dltensor(inp_out);
-            ::dt_euclidean(t, voxel_spacing, stream);
+            ff::dt_euclidean(t, voxel_spacing, stream);
         },
         "inp_out"_a, "voxel_spacing"_a = 1.0, "stream"_a = 0,
         "In-place Euclidean distance transform along the last axis "
@@ -125,7 +88,7 @@ NB_MODULE(_core, m) {
         "dt_l1",
         [](arr inp_out, double voxel_spacing, int stream) {
             DLTensor t = to_dltensor(inp_out);
-            ::dt_l1(t, voxel_spacing, stream);
+            ff::dt_l1(t, voxel_spacing, stream);
         },
         "inp_out"_a, "voxel_spacing"_a = 1.0, "stream"_a = 0,
         "In-place L1 distance transform along the last axis.");
@@ -137,7 +100,7 @@ NB_MODULE(_core, m) {
             DLTensor t = to_dltensor(time), d = to_dltensor(dist),
                      l = to_dltensor(loc), c = to_dltensor(coeff),
                      ts = to_dltensor(times);
-            ::dt_spline_table(t, d, l, c, ts, spline, bound, stream);
+            ff::dt_spline_table(t, d, l, c, ts, spline, bound, stream);
         },
         "time"_a, "dist"_a, "loc"_a, "coeff"_a, "times"_a, "spline"_a = 3,
         "bound"_a = 3, "stream"_a = 0,
@@ -149,7 +112,7 @@ NB_MODULE(_core, m) {
            double step, int8_t spline, int8_t bound, int stream) {
             DLTensor t = to_dltensor(time), d = to_dltensor(dist),
                      l = to_dltensor(loc), c = to_dltensor(coeff);
-            ::dt_spline_brent(t, d, l, c, max_iter, tol, step, spline, bound,
+            ff::dt_spline_brent(t, d, l, c, max_iter, tol, step, spline, bound,
                               stream);
         },
         "time"_a, "dist"_a, "loc"_a, "coeff"_a, "max_iter"_a, "tol"_a, "step"_a,
@@ -162,7 +125,7 @@ NB_MODULE(_core, m) {
            int8_t spline, int8_t bound, int stream) {
             DLTensor t = to_dltensor(time), d = to_dltensor(dist),
                      l = to_dltensor(loc), c = to_dltensor(coeff);
-            ::dt_spline_gaussnewton(t, d, l, c, max_iter, tol, spline, bound,
+            ff::dt_spline_gaussnewton(t, d, l, c, max_iter, tol, spline, bound,
                                     stream);
         },
         "time"_a, "dist"_a, "loc"_a, "coeff"_a, "max_iter"_a, "tol"_a,
@@ -177,7 +140,7 @@ NB_MODULE(_core, m) {
             DLTensor nv = opt_to_dltensor(nearest_vertex);
             DLTensor l = to_dltensor(loc), v = to_dltensor(vertices),
                      f = to_dltensor(faces);
-            ::dt_mesh(d, nv, l, v, f, signed_, naive, stream);
+            ff::dt_mesh(d, nv, l, v, f, signed_, naive, stream);
         },
         "dist"_a, "nearest_vertex"_a.none() = nb::none(), "loc"_a, "vertices"_a,
         "faces"_a, "signed_"_a = true, "naive"_a = false, "stream"_a = 0,
@@ -189,7 +152,7 @@ NB_MODULE(_core, m) {
         [](arr out, arr hessian, arr inp, int stream) {
             DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
                      i = to_dltensor(inp);
-            ::sym_matvec(o, h, i, stream);
+            ff::sym_matvec(o, h, i, stream);
         },
         "out"_a, "hessian"_a, "inp"_a, "stream"_a = 0,
         "out = H @ inp (H is compact-symmetric, diagonal-then-rows packed).");
@@ -199,7 +162,7 @@ NB_MODULE(_core, m) {
         [](arr out, arr grd, arr inp, int stream) {
             DLTensor o = to_dltensor(out), g = to_dltensor(grd),
                      i = to_dltensor(inp);
-            ::sym_matvec_backward(o, g, i, stream);
+            ff::sym_matvec_backward(o, g, i, stream);
         },
         "out"_a, "grd"_a, "inp"_a, "stream"_a = 0,
         "Backward of sym_matvec wrt the matrix.");
@@ -209,7 +172,7 @@ NB_MODULE(_core, m) {
         [](arr out, arr hessian, arr inp, int stream) {
             DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
                      i = to_dltensor(inp);
-            ::sym_addmatvec_(o, h, i, stream);
+            ff::sym_addmatvec_(o, h, i, stream);
         },
         "out"_a, "hessian"_a, "inp"_a, "stream"_a = 0, "out += H @ inp.");
 
@@ -218,7 +181,7 @@ NB_MODULE(_core, m) {
         [](arr out, arr hessian, arr inp, int stream) {
             DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
                      i = to_dltensor(inp);
-            ::sym_submatvec_(o, h, i, stream);
+            ff::sym_submatvec_(o, h, i, stream);
         },
         "out"_a, "hessian"_a, "inp"_a, "stream"_a = 0, "out -= H @ inp.");
 
@@ -229,7 +192,7 @@ NB_MODULE(_core, m) {
             DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
                      i = to_dltensor(inp);
             DLTensor w = opt_to_dltensor(weight);
-            ::sym_solve(o, h, i, w, stream);
+            ff::sym_solve(o, h, i, w, stream);
         },
         "out"_a, "hessian"_a, "inp"_a, "weight"_a.none() = nb::none(),
         "stream"_a = 0, "out = (H + diag(weight)) \\ inp (weight optional).");
@@ -239,7 +202,7 @@ NB_MODULE(_core, m) {
         [](arr inp_out, arr hessian, std::optional<arr> weight, int stream) {
             DLTensor io = to_dltensor(inp_out), h = to_dltensor(hessian);
             DLTensor w = opt_to_dltensor(weight);
-            ::sym_solve_(io, h, w, stream);
+            ff::sym_solve_(io, h, w, stream);
         },
         "inp_out"_a, "hessian"_a, "weight"_a.none() = nb::none(),
         "stream"_a = 0,
@@ -249,7 +212,7 @@ NB_MODULE(_core, m) {
         "sym_invert",
         [](arr out, arr hessian, int stream) {
             DLTensor o = to_dltensor(out), h = to_dltensor(hessian);
-            ::sym_invert(o, h, stream);
+            ff::sym_invert(o, h, stream);
         },
         "out"_a, "hessian"_a, "stream"_a = 0,
         "out = inv(H) (both compact-symmetric).");
@@ -258,7 +221,7 @@ NB_MODULE(_core, m) {
         "sym_invert_",
         [](arr hessian, int stream) {
             DLTensor h = to_dltensor(hessian);
-            ::sym_invert_(h, stream);
+            ff::sym_invert_(h, stream);
         },
         "hessian"_a, "stream"_a = 0,
         "In-place: hessian = inv(hessian) (compact-symmetric).");

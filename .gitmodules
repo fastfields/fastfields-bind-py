@@ -1,0 +1,4 @@
+[submodule "fastfields"]
+	path = fastfields
+	url = git@github.com:fastfields/fastfields-lib.git
+	branch = claude/jitfields-fastfields-migration-v5r416
