@@ -7,11 +7,12 @@ Custom build_ext that:
      ./fastfields, linking -lfastfields with an $ORIGIN/lib rpath,
   4. ships the .so libraries as package data.
 
-./_fastfields_lib is treated as the fastfields-lib source tree; it works whether
-that path is a symlink (dev) or a git submodule (release). The Python package it
-builds is the PEP 420 namespace subpackage ``fastfields.dlpack`` (the compiled
-extension imports as ``fastfields.dlpack._core``); no ``fastfields/__init__.py``
-is created, so other distributions can merge into the same ``fastfields`` namespace.
+./_fastfields_lib is treated as the fastfields-lib source tree; it works
+whether that path is a symlink (dev) or a git submodule (release). The Python
+package it builds is the PEP 420 namespace subpackage ``fastfields.dlpack``
+(the compiled extension imports as ``fastfields.dlpack._core``); no
+``fastfields/__init__.py`` is created, so other distributions can merge into
+the same ``fastfields`` namespace.
 """
 
 from __future__ import annotations
@@ -19,7 +20,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 import sysconfig
 
 from setuptools import Extension, setup
@@ -67,11 +67,13 @@ class BuildExt(build_ext):
                 "Initialise the git submodule (or create the symlink)."
             )
         print(f"[fastfields_bind] building fastfields-lib in {FASTFIELDS_DIR}")
-        subprocess.check_call(
-            ["make", "-C", FASTFIELDS_DIR, f"CXX={CXX}"]
-        )
-        if not (os.path.exists(MAIN_LIB_PATH) and os.path.exists(CPU_LIB_PATH)):
-            raise RuntimeError("fastfields-lib build did not produce the expected .so files")
+        subprocess.check_call(["make", "-C", FASTFIELDS_DIR, f"CXX={CXX}"])
+        if not (
+            os.path.exists(MAIN_LIB_PATH) and os.path.exists(CPU_LIB_PATH)
+        ):
+            raise RuntimeError(
+                "fastfields-lib build did not produce the expected .so files"
+            )
 
     # -- step 2: ship the libraries inside the package -----------------------
     def _copy_libs_into_package(self):
@@ -82,7 +84,9 @@ class BuildExt(build_ext):
             shutil.copymode(src, dst)
         # Mirror into the build tree so a wheel build also picks them up.
         if getattr(self, "build_lib", None):
-            build_pkg_lib = os.path.join(self.build_lib, "fastfields", "dlpack", "lib")
+            build_pkg_lib = os.path.join(
+                self.build_lib, "fastfields", "dlpack", "lib"
+            )
             os.makedirs(build_pkg_lib, exist_ok=True)
             for name in (MAIN_LIB, CPU_LIB):
                 shutil.copyfile(
@@ -117,10 +121,12 @@ class BuildExt(build_ext):
             cmd += ["-I", inc]
         cmd += sources
         cmd += [
-            "-L", FASTFIELDS_BUILD,
+            "-L",
+            FASTFIELDS_BUILD,
             "-lfastfields",
             "-Wl,-rpath,$ORIGIN/lib",
-            "-o", ext_path,
+            "-o",
+            ext_path,
         ]
         print("[fastfields_bind] " + " ".join(cmd))
         subprocess.check_call(cmd)

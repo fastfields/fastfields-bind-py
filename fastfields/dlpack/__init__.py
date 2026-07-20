@@ -1,4 +1,4 @@
-"""fastfields.dlpack: nanobind bindings from DLPack to the fastfields-lib C++ library.
+"""fastfields.dlpack: nanobind DLPack bindings to the fastfields-lib C++ lib.
 
 All functions accept any array object exposing ``__dlpack__`` (numpy, torch,
 cupy, ...). Tensors marked in-place / as outputs are written through their
@@ -73,14 +73,14 @@ class Spline(IntEnum):
 class Bound(IntEnum):
     """Boundary condition (passed as the ``bound`` argument)."""
 
-    Zero = 0       # zero outside the FOV
+    Zero = 0  # zero outside the FOV
     Replicate = 1  # clip coordinates
-    DCT1 = 2       # symmetric w.r.t. voxel centre
-    DCT2 = 3       # symmetric w.r.t. voxel edge (Neumann)
-    DST1 = 4       # antisymmetric w.r.t. voxel centre
-    DST2 = 5       # antisymmetric w.r.t. voxel edge (Dirichlet)
-    DFT = 6        # circular / wrap around
-    NoCheck = 7    # assume coordinates are inbound
+    DCT1 = 2  # symmetric w.r.t. voxel centre
+    DCT2 = 3  # symmetric w.r.t. voxel edge (Neumann)
+    DST1 = 4  # antisymmetric w.r.t. voxel centre
+    DST2 = 5  # antisymmetric w.r.t. voxel edge (Dirichlet)
+    DFT = 6  # circular / wrap around
+    NoCheck = 7  # assume coordinates are inbound
 
 
 __all__ = [

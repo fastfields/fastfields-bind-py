@@ -1,4 +1,7 @@
-"""Tests for fastfields.dlpack. Runnable via `pytest` or `python tests/test_bindings.py`."""
+"""Tests for fastfields.dlpack.
+
+Runnable via ``pytest`` or ``python tests/test_bindings.py``.
+"""
 
 import numpy as np
 
@@ -25,8 +28,10 @@ def _edt_reference(inp, voxel_spacing, cost):
 
 def test_dt_euclidean():
     inp = np.array(
-        [[0, np.inf, np.inf, 0, np.inf, np.inf, np.inf],
-         [np.inf, np.inf, 0, np.inf, np.inf, 0, np.inf]],
+        [
+            [0, np.inf, np.inf, 0, np.inf, np.inf, np.inf],
+            [np.inf, np.inf, 0, np.inf, np.inf, 0, np.inf],
+        ],
         dtype=np.float32,
     )
     ref = _edt_reference(inp, 1.0, lambda d: d * d)
@@ -36,8 +41,10 @@ def test_dt_euclidean():
 
 def test_dt_l1():
     inp = np.array(
-        [[0, np.inf, np.inf, 0, np.inf, np.inf, np.inf],
-         [np.inf, np.inf, 0, np.inf, np.inf, 0, np.inf]],
+        [
+            [0, np.inf, np.inf, 0, np.inf, np.inf, np.inf],
+            [np.inf, np.inf, 0, np.inf, np.inf, 0, np.inf],
+        ],
         dtype=np.float32,
     )
     ref = _edt_reference(inp, 1.0, lambda d: abs(d))
