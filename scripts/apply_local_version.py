@@ -2,10 +2,10 @@
 """Stamp a compute-backend **local version label** onto a built wheel.
 
 Release wheels encode their backend in the PEP 440 *local version* segment
-(PyTorch convention): ``fastfields_dlpack-0.1.0+cu128-cp311-…whl``. cibuildwheel
-and ``python -m build`` have no hook to set that, so this repacks the wheel:
-rewrite the ``Version`` in ``METADATA``, rename the ``.dist-info`` directory, and
-regenerate ``RECORD`` via ``wheel pack``.
+(PyTorch convention): ``fastfields_dlpack-0.1.0+cu128-cp311-…whl``. Neither
+cibuildwheel nor ``python -m build`` has a hook to set that, so this repacks
+the wheel: rewrite the ``Version`` in ``METADATA``, rename the ``.dist-info``
+directory, and regenerate ``RECORD`` via ``wheel pack``.
 
 Usage
 -----
@@ -90,8 +90,15 @@ def apply(wheel: Path, dest_dir: Path, label: str) -> Path:
         unpacked = next(tmp_path.iterdir())
         new_root = _rewrite(unpacked, name, new_version)
         subprocess.check_call(
-            [sys.executable, "-m", "wheel", "pack", str(new_root),
-             "-d", str(dest_dir)]
+            [
+                sys.executable,
+                "-m",
+                "wheel",
+                "pack",
+                str(new_root),
+                "-d",
+                str(dest_dir),
+            ]
         )
     out = next(dest_dir.glob(f"{name}-{new_version}-*.whl"))
     print(f"stamped {wheel.name} -> {out.name}")
