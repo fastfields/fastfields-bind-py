@@ -8,11 +8,19 @@ permissions:
   contents: read
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.9", "3.11", "3.12"]
+    # The C++ build that fastfields-dlpack needs is driven by clang++ on every
+    # OS; the per-OS steps below make sure a clang++ is on PATH.
+    env:
+      CXX: clang++
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
         with:
@@ -20,8 +28,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install build toolchain
+      - name: Install build toolchain (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Install build toolchain (macOS)
+        if: runner.os == 'macOS'
+        # clang++ ships with the Xcode Command Line Tools, already present on
+        # the macOS runners, so there is nothing to install here.
+        run: clang++ --version
+      - name: Install build toolchain (Windows)
+        if: runner.os == 'Windows'
+        # NOTE: the Windows leg is expected to be RED for now. The C++ build
+        # uses clang-style Unix Makefiles that are not yet portable to Windows,
+        # so this install/build will fail until the Makefiles are made
+        # cross-platform. We keep the leg in the matrix (not hidden) so the gap
+        # stays visible. LLVM provides clang++; make is needed by the Makefiles.
+        run: choco install -y llvm make
       # TODO: the git+ install of fastfields-dlpack below does NOT fetch its
       # submodules, so this cross-repo source build is fragile and will likely
       # need a live-CI iteration (or installing from a wheel index once one
