@@ -1,0 +1,35 @@
+name: Test
+on:
+  push:
+    branches: [main]
+    paths: ["fastfields/**", "tests/**", "pyproject.toml", ".github/workflows/test.yaml"]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install build toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang
+      # TODO: the git+ install of fastfields-dlpack below does NOT fetch its
+      # submodules, so this cross-repo source build is fragile and will likely
+      # need a live-CI iteration (or installing from a wheel index once one
+      # exists). For fastfields-bind-py this step is skipped (it IS dlpack).
+      - name: Install fastfields-dlpack from source
+        if: ${{ github.event.repository.name != 'fastfields-bind-py' }}
+        run: pip install "fastfields-dlpack @ git+https://github.com/fastfields/fastfields-bind-py@main"
+      - name: Install package + test deps
+        run: pip install ".[test]"
+      - name: Run pytest
+        run: cd /tmp && python -m pytest ${{ github.workspace }}/tests -q
