@@ -7,7 +7,7 @@ repo_url = "https://github.com/fastfields/fastfields-bind-py"
 repo_name = "fastfields/fastfields-bind-py"
 copyright = "Copyright &copy; 2026 The fastfields authors"
 nav = [
-  {"fastfields" = "https://fastfields.github.io/docs/"},
+  {"fastfields home" = "https://fastfields.github.io/"},
   {"Home" = "index.md"},
   {"API" = "api/index.md"},
 ]
