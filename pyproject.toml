@@ -1,15 +1,31 @@
 [build-system]
-requires = ["setuptools>=64", "wheel", "nanobind>=1.9", "numpy"]
+requires = ["setuptools>=64", "wheel", "nanobind>=1.9", "numpy", "versioningit>=3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "fastfields-dlpack"
-version = "0.1.0"
 description = "nanobind bindings from DLPack to the fastfields-lib C++ library (fastfields.dlpack)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "fastfields" }]
+authors = [{ name = "Yaël Balbastre", email = "yael.bx@gmail.com" }]
+maintainers = [{ name = "Yaël Balbastre", email = "yael.bx@gmail.com" }]
+keywords = ["fastfields", "medical-imaging", "interpolation", "distance-transform", "gpu", "dlpack"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
+dynamic = ["version"]
 dependencies = []
 
 [project.optional-dependencies]
@@ -40,3 +56,34 @@ ignore = [
     "B007",   # allow unused loop variables
     "E731",   # allow assigning lambdas to variables
 ]
+
+[project.urls]
+Homepage = "https://github.com/fastfields/fastfields-bind-py"
+Documentation = "https://fastfields.github.io/fastfields-bind-py/"
+Issues = "https://github.com/fastfields/fastfields-bind-py/issues"
+Repository = "https://github.com/fastfields/fastfields-bind-py"
+
+[tool.versioningit]
+default-version = "0+unknown"
+
+[tool.versioningit.vcs]
+default-tag = "0.1"
+
+[tool.versioningit.format]
+distance = "{base_version}+{distance}.{vcs}{rev}"
+dirty = "{base_version}+{distance}.{vcs}{rev}.dirty"
+distance-dirty = "{base_version}+{distance}.{vcs}{rev}.dirty"
+
+[tool.versioningit.write]
+file = "fastfields/dlpack/_version.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["fastfields.dlpack"]
+omit = ["*/_version.py"]
+
+[tool.codespell]
+check-filenames = true
+skip = ".git,*.egg-info,build,dist,*.pdf,*.svg,docs/examples"

@@ -17,3 +17,6 @@ dist/
 
 # fastfields-lib's own build tree (when ./_fastfields_lib is a checkout/submodule)
 /_fastfields_lib/build/
+
+# versioningit-generated version file
+/fastfields/dlpack/_version.py
