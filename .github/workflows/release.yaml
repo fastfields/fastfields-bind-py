@@ -1,0 +1,164 @@
+# Build & publish the fastfields-dlpack wheels (the only per-backend package —
+# it bundles the compiled libfastfields*). The pure-Python wrappers ship a
+# single universal wheel from their own, simpler release workflow.
+#
+# MANUAL ONLY: there are no push/tag triggers, so nothing here runs until you
+# start it from the Actions tab. Leaving it un-triggered is intentional.
+#
+# STATUS: the `cpu` path is complete and buildable today. The `cuXXX` paths are
+# scaffolded but need the CUDA build of fastfields-lib (FF_WITH_CUDA, i.e. the
+# lib linking libfastfields-cuda + setup.py bundling it) which is not finished
+# yet — see MIGRATION.md task T21. They are wired here so the release pipeline
+# is ready the moment that lands.
+
+name: Release wheels (fastfields-dlpack)
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: "Compute backend to build"
+        type: choice
+        default: cpu
+        options: [cpu, cu126, cu128]
+      ref:
+        description: "Commit / tag / branch to build"
+        type: string
+        default: ""
+      publish_release:
+        description: "Create a GitHub Release and upload the wheels"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write        # create releases + upload assets
+
+env:
+  # Fat builds: one binary, many GPU archs (SASS) + a forward-compat PTX. Widen
+  # freely — larger/slower is the accepted trade for coverage. The cuda-lib
+  # Makefile must honour FF_CUDA_ARCHS (task T21); until then this is inert.
+  ARCHS_cu126: "50;60;70;75;80;86;89;90;90-virtual"
+  ARCHS_cu128: "50;60;70;75;80;86;89;90;100;120;120-virtual"
+
+jobs:
+  # ---------------------------------------------------------------- CPU wheels
+  cpu:
+    if: ${{ inputs.backend == 'cpu' }}
+    name: cpu wheels (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive          # pulls _fastfields_lib + its submodules
+          fetch-depth: 0                  # versioningit needs tags/history
+      - uses: pypa/cibuildwheel@v2.21
+        env:
+          # setup.py builds the C++ libs with clang; ship cp39..cp312, skip the
+          # slow/legacy targets. The local version label (+cpu) is applied after
+          # the build by the reusable step below (cibuildwheel has no hook for
+          # rewriting the version, so we repack).
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-*"
+          CIBW_SKIP: "*-musllinux_* *_i686 *-win32"
+          CIBW_ARCHS_MACOS: "arm64 x86_64"
+          CIBW_BEFORE_ALL_LINUX: "yum install -y clang || (apt-get update && apt-get install -y clang)"
+          CIBW_ENVIRONMENT: 'CXX=clang++ FASTFIELDS_LOCAL=cpu'
+          # manylinux repair bundles the C++ .so; the package already sets an
+          # $ORIGIN/lib rpath, so exclude our own libs from being re-vendored.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
+            pipx run scripts/apply_local_version.py {wheel} {dest_dir} cpu &&
+            auditwheel repair --exclude libfastfields.so --exclude libfastfields-cpu.so -w {dest_dir} {dest_dir}/*.whl
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: "python scripts/apply_local_version.py {wheel} {dest_dir} cpu"
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: "python scripts\\apply_local_version.py {wheel} {dest_dir} cpu"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-cpu-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  # --------------------------------------------------------------- CUDA wheels
+  # Linux only (no CUDA on macOS; Windows CUDA wheels can be added later with a
+  # windows CUDA toolkit install). Built inside NVIDIA's devel image so nvcc +
+  # the toolkit are present; no GPU is needed to *build*.
+  cuda:
+    if: ${{ inputs.backend != 'cpu' }}
+    name: ${{ inputs.backend }} wheels (linux)
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:12.8.0-devel-ubuntu22.04
+    timeout-minutes: 180                  # fat multi-arch nvcc builds are slow
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+          fetch-depth: 0
+      - name: Install build deps
+        run: |
+          apt-get update
+          apt-get install -y clang python3-pip git
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build CUDA wheel
+        env:
+          FASTFIELDS_LOCAL: ${{ inputs.backend }}
+          # Consumed by setup.py / the cuda-lib Makefile once T21 lands: build
+          # libfastfields-cuda with FF_WITH_CUDA and this gencode list, bundle
+          # it, and link the lib against it.
+          FF_WITH_CUDA: "1"
+          FF_CUDA_ARCHS: ${{ inputs.backend == 'cu128' && env.ARCHS_cu128 || env.ARCHS_cu126 }}
+          CXX: clang++
+        run: |
+          python -m pip install --upgrade pip build auditwheel
+          python -m build --wheel --outdir dist_raw
+          python scripts/apply_local_version.py dist_raw/*.whl dist "${FASTFIELDS_LOCAL}"
+          # Bundle third-party libs but keep our own (rpath'd) libfastfields*.
+          auditwheel repair \
+            --exclude libfastfields.so \
+            --exclude libfastfields-cpu.so \
+            --exclude libfastfields-cuda.so \
+            -w wheelhouse dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ inputs.backend }}-py${{ matrix.python }}
+          path: wheelhouse/*.whl
+
+  # ------------------------------------------------------------------- release
+  release:
+    if: ${{ inputs.publish_release }}
+    needs: [cpu, cuda]
+    # `needs` on a skipped job resolves to 'skipped', not failure, so this runs
+    # whichever of cpu/cuda actually built.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload wheels to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.ref != '' && inputs.ref || format('wheels-{0}', github.run_id) }}
+          files: dist/*.whl
+          fail_on_unmatched_files: true
+      - name: Ping the wheel index to rebuild
+        env:
+          GH_TOKEN: ${{ secrets.WHL_DISPATCH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          # Tell fastfields/whl to regenerate the index from the new assets.
+          # Needs a token with `contents: write` on fastfields/whl (the default
+          # GITHUB_TOKEN is scoped to THIS repo, so set a WHL_DISPATCH_TOKEN
+          # secret for cross-repo dispatch).
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/fastfields/whl/dispatches \
+            -d '{"event_type":"wheels-updated"}' || \
+            echo "::warning::index dispatch failed (set WHL_DISPATCH_TOKEN)"
