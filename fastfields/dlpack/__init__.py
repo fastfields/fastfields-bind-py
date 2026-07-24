@@ -9,23 +9,45 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 from enum import IntEnum
 
 _this_dir = os.path.dirname(os.path.abspath(__file__))
 _lib_dir = os.path.join(_this_dir, "lib")
 
+# Shared-library suffix used by the fastfields-lib Makefile, per platform.
+if sys.platform == "darwin":
+    _LIBEXT = "dylib"
+elif sys.platform == "win32":
+    _LIBEXT = "dll"
+else:
+    _LIBEXT = "so"
+
+# cpu first, then the hub library that depends on it.
+_NATIVE_LIBS = ("libfastfields-cpu." + _LIBEXT, "libfastfields." + _LIBEXT)
+
 
 def _preload_native_libs() -> None:
-    """Preload the shipped shared libraries with RTLD_GLOBAL.
+    """Make the shipped shared libraries loadable by the ``_core`` extension.
 
-    We load ``libfastfields-cpu.so`` first, then ``libfastfields.so`` (which
-    depends on it). Preloading by absolute path registers each library under
-    its soname, so when the ``_core`` extension is imported the dynamic loader
-    reuses the already-loaded copies and never has to resolve them via rpath.
-    This makes import robust regardless of the (transitive) RUNPATH baked into
-    libfastfields.so.
+    On ELF/Mach-O we preload cpu first, then the hub library, by absolute path
+    with ``RTLD_GLOBAL``: this registers each under its soname so the loader
+    reuses the copies when ``_core`` is imported, regardless of the RUNPATH
+    baked into libfastfields. On Windows there is no ``RTLD_GLOBAL`` and no
+    rpath, so we add the lib directory to the DLL search path (``_core`` and the
+    hub DLL then resolve their dependencies from there) and also load the DLLs
+    eagerly so a missing dependency surfaces here rather than as an opaque
+    extension-import failure.
     """
-    for name in ("libfastfields-cpu.so", "libfastfields.so"):
+    if sys.platform == "win32":
+        if os.path.isdir(_lib_dir):
+            os.add_dll_directory(_lib_dir)
+        for name in _NATIVE_LIBS:
+            path = os.path.join(_lib_dir, name)
+            if os.path.exists(path):
+                ctypes.CDLL(path)
+        return
+    for name in _NATIVE_LIBS:
         path = os.path.join(_lib_dir, name)
         if os.path.exists(path):
             ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)

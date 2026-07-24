@@ -39,11 +39,12 @@ jobs:
         run: clang++ --version
       - name: Install build toolchain (Windows)
         if: runner.os == 'Windows'
-        # NOTE: the Windows leg is expected to be RED for now. The C++ build
-        # uses clang-style Unix Makefiles that are not yet portable to Windows,
-        # so this install/build will fail until the Makefiles are made
-        # cross-platform. We keep the leg in the matrix (not hidden) so the gap
-        # stays visible. LLVM provides clang++; make is needed by the Makefiles.
+        # The C++ Makefiles are now Windows-portable: clang++ builds a .dll
+        # with no -fPIC/-soname, and the recipes run under git bash (shell:
+        # bash). LLVM provides clang++; make drives the Makefiles. This leg was
+        # red by design before that work landed; it may still need a live-CI
+        # iteration on the first real Windows run (DLL-search / import-library
+        # specifics can only be confirmed on the runner).
         run: choco install -y llvm make
       # TODO: the git+ install of fastfields-dlpack below does NOT fetch its
       # submodules, so this cross-repo source build is fragile and will likely
