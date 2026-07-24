@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import sysconfig
 
 from setuptools import Extension, setup
@@ -31,9 +32,25 @@ FASTFIELDS_BUILD = os.path.join(FASTFIELDS_DIR, "build")
 PKG_DIR = os.path.join(HERE, "fastfields", "dlpack")
 PKG_LIB_DIR = os.path.join(PKG_DIR, "lib")
 
+# The fastfields-lib Makefile names its shared libraries per platform, exactly
+# as the loader expects: .so on Linux, .dylib on macOS, .dll on Windows. Match
+# that here (a hard-coded ".so" silently broke the macOS/Windows CI legs). The
+# extension is found next to its shipped libs via an rpath that also differs by
+# platform ($ORIGIN on ELF, @loader_path on Mach-O); Windows has no rpath and
+# instead relies on os.add_dll_directory at import time (see __init__.py).
+if sys.platform == "darwin":
+    LIBEXT = "dylib"
+    RPATH_FLAG = "-Wl,-rpath,@loader_path/lib"
+elif sys.platform == "win32":
+    LIBEXT = "dll"
+    RPATH_FLAG = None
+else:
+    LIBEXT = "so"
+    RPATH_FLAG = "-Wl,-rpath,$ORIGIN/lib"
+
 # Shared libraries produced by the fastfields-lib Makefile.
-MAIN_LIB = "libfastfields.so"
-CPU_LIB = "libfastfields-cpu.so"
+MAIN_LIB = "libfastfields." + LIBEXT
+CPU_LIB = "libfastfields-cpu." + LIBEXT
 MAIN_LIB_PATH = os.path.join(FASTFIELDS_BUILD, MAIN_LIB)
 CPU_LIB_PATH = os.path.join(FASTFIELDS_BUILD, "lib", CPU_LIB)
 
@@ -109,25 +126,23 @@ class BuildExt(build_ext):
         ext_path = self.get_ext_fullpath(ext.name)
         os.makedirs(os.path.dirname(ext_path), exist_ok=True)
 
-        cmd = [
-            CXX,
-            "-std=c++17",
-            "-fPIC",
-            "-O2",
-            "-shared",
-            "-fvisibility=hidden",
-        ]
+        cmd = [CXX, "-std=c++17", "-O2", "-shared", "-fvisibility=hidden"]
+        # Position-independent code is POSIX-only (default on Windows PE/COFF).
+        if sys.platform != "win32":
+            cmd.append("-fPIC")
         for inc in include_dirs:
             cmd += ["-I", inc]
         cmd += sources
-        cmd += [
-            "-L",
-            FASTFIELDS_BUILD,
-            "-lfastfields",
-            "-Wl,-rpath,$ORIGIN/lib",
-            "-o",
-            ext_path,
-        ]
+        if sys.platform == "win32":
+            # No import library is produced for libfastfields.dll, so link the
+            # extension directly against the DLL by path; the DLL is then
+            # located at import time via os.add_dll_directory.
+            cmd += [MAIN_LIB_PATH]
+        else:
+            cmd += ["-L", FASTFIELDS_BUILD, "-lfastfields"]
+        if RPATH_FLAG:
+            cmd += [RPATH_FLAG]
+        cmd += ["-o", ext_path]
         print("[fastfields_bind] " + " ".join(cmd))
         subprocess.check_call(cmd)
 
