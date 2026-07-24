@@ -130,6 +130,13 @@ class BuildExt(build_ext):
         # Position-independent code is POSIX-only (default on Windows PE/COFF).
         if sys.platform != "win32":
             cmd.append("-fPIC")
+        # A CPython extension resolves the interpreter's C-API symbols (_Py*)
+        # at load time, so they must be left undefined in the module. ELF
+        # permits undefined symbols in a shared object by default; Mach-O does
+        # not, so ld errors ("Undefined symbols ... _PyWeakref_NewRef") unless
+        # we defer them explicitly.
+        if sys.platform == "darwin":
+            cmd += ["-undefined", "dynamic_lookup"]
         for inc in include_dirs:
             cmd += ["-I", inc]
         cmd += sources
