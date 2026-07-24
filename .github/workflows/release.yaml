@@ -55,6 +55,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           submodules: recursive          # pulls _fastfields_lib + its submodules
+          token: ${{ secrets.CI_SUBMODULE_TOKEN }}
           fetch-depth: 0                  # versioningit needs tags/history
       - uses: pypa/cibuildwheel@v2.21
         env:
@@ -98,6 +99,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           submodules: recursive
+          token: ${{ secrets.CI_SUBMODULE_TOKEN }}
           fetch-depth: 0
       - name: Install build deps
         run: |
