@@ -37,7 +37,7 @@ PKG_LIB_DIR = os.path.join(PKG_DIR, "lib")
 # that here (a hard-coded ".so" silently broke the macOS/Windows CI legs). The
 # extension is found next to its shipped libs via an rpath that also differs by
 # platform ($ORIGIN on ELF, @loader_path on Mach-O); Windows has no rpath and
-# instead relies on os.add_dll_directory at import time (see dlpack/__init__.py).
+# instead relies on os.add_dll_directory at import time (see __init__.py).
 if sys.platform == "darwin":
     LIBEXT = "dylib"
     RPATH_FLAG = "-Wl,-rpath,@loader_path/lib"
@@ -135,7 +135,7 @@ class BuildExt(build_ext):
         cmd += sources
         if sys.platform == "win32":
             # No import library is produced for libfastfields.dll, so link the
-            # extension directly against the DLL by path; the DLL itself is then
+            # extension directly against the DLL by path; the DLL is then
             # located at import time via os.add_dll_directory.
             cmd += [MAIN_LIB_PATH]
         else:

@@ -34,7 +34,7 @@ def _preload_native_libs() -> None:
     with ``RTLD_GLOBAL``: this registers each under its soname so the loader
     reuses the copies when ``_core`` is imported, regardless of the RUNPATH
     baked into libfastfields. On Windows there is no ``RTLD_GLOBAL`` and no
-    rpath, so we add the lib directory to the DLL search path (``_core`` and the
+    rpath, so we add the lib dir to the DLL search path (``_core`` and the
     hub DLL then resolve their dependencies from there) and also load the DLLs
     eagerly so a missing dependency surfaces here rather than as an opaque
     extension-import failure.
