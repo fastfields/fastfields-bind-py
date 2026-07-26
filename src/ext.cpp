@@ -22,6 +22,9 @@
 #include "resize.h"     // ff::resample  + dlpack.h (DLTensor)
 #include "restrict.h"   // ff::restriction
 #include "splinc.h"     // ff::spline_coeff
+#include "pushpull.h"   // ff::pull / push / count / grad
+#include "reg_field.h"  // ff::field_matvec / field_diag
+#include "reg_flow.h"   // ff::flow_matvec / flow_diag
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -62,6 +65,14 @@ static DLTensor null_dltensor() {
 
 static DLTensor opt_to_dltensor(std::optional<arr> &a) {
     return a.has_value() ? to_dltensor(*a) : null_dltensor();
+}
+
+// A `const double *` view of an optional Python sequence, or nullptr when the
+// sequence is absent/empty (the library reads a null pointer as "use the
+// default": all-ones voxel size, or a disabled penalty). Used by the
+// regulariser bindings for voxel_size / absolute / membrane / bending.
+static const double *vec_ptr(std::optional<std::vector<double>> &v) {
+    return (v.has_value() && !v->empty()) ? v->data() : nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,4 +287,128 @@ NB_MODULE(_core, m) {
         "inp_out"_a, "spline"_a = 3, "bound"_a = 3, "stream"_a = 0,
         "In-place spline-coefficient prefilter along the last axis "
         "(orders 0/1 are no-ops).");
+
+    // ----- pushpull.h -----
+    // Channel-last, x-first coordinate convention. `grid` holds sampling
+    // coordinates in voxels; D (its last dim) is the spatial rank (1/2/3).
+    m.def(
+        "pull",
+        [](arr out, arr inp, arr grid, int8_t spline, int8_t bound,
+           int8_t extrapolate, int stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
+                     g = to_dltensor(grid);
+            ff::pull(o, i, g, spline, bound, extrapolate, stream);
+        },
+        "out"_a, "inp"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3,
+        "extrapolate"_a = 1, "stream"_a = 0,
+        "Sample (pull) a spline-encoded volume at grid coordinates. "
+        "inp (*batch,*inshape,C), grid (*batch,*outshape,D), "
+        "out (*batch,*outshape,C).");
+
+    m.def(
+        "push",
+        [](arr out, arr inp, arr grid, int8_t spline, int8_t bound,
+           int8_t extrapolate, int stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
+                     g = to_dltensor(grid);
+            ff::push(o, i, g, spline, bound, extrapolate, stream);
+        },
+        "out"_a, "inp"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3,
+        "extrapolate"_a = 1, "stream"_a = 0,
+        "Splat (push) values into a volume; adjoint of pull. out "
+        "(*batch,*inshape,C) is accumulated into and must be pre-zeroed.");
+
+    m.def(
+        "count",
+        [](arr out, arr grid, int8_t spline, int8_t bound, int8_t extrapolate,
+           int stream) {
+            DLTensor o = to_dltensor(out), g = to_dltensor(grid);
+            ff::count(o, g, spline, bound, extrapolate, stream);
+        },
+        "out"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3, "extrapolate"_a = 1,
+        "stream"_a = 0,
+        "Splat ones (push of an all-ones input). out (*batch,*inshape,1) must "
+        "be pre-zeroed.");
+
+    m.def(
+        "grad",
+        [](arr out, arr inp, arr grid, int8_t spline, int8_t bound,
+           int8_t extrapolate, bool abs, int stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
+                     g = to_dltensor(grid);
+            ff::grad(o, i, g, spline, bound, extrapolate, abs, stream);
+        },
+        "out"_a, "inp"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3,
+        "extrapolate"_a = 1, "abs"_a = false, "stream"_a = 0,
+        "Sample spatial gradients of a spline-encoded volume. "
+        "out (*batch,*outshape,C,D).");
+
+    // ----- reg_field.h (multi-channel field; per-channel penalty vectors) -----
+    // voxel_size is a length-ndim sequence; absolute/membrane/bending are
+    // length-C sequences (any may be omitted -> that penalty is disabled).
+    m.def(
+        "field_matvec",
+        [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            ff::field_matvec(o, i, vec_ptr(voxel_size), vec_ptr(absolute),
+                             vec_ptr(membrane), vec_ptr(bending), bound, ndim,
+                             stream);
+        },
+        "out"_a, "inp"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "Apply a spatial regulariser to a multi-channel field "
+        "(*batch,*spatial,C).");
+
+    m.def(
+        "field_diag",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::field_diag(o, vec_ptr(voxel_size), vec_ptr(absolute),
+                           vec_ptr(membrane), vec_ptr(bending), bound, ndim,
+                           stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "Diagonal (preconditioner) of the field regulariser operator.");
+
+    // ----- reg_flow.h (vector flow field; scalar penalties) -----
+    m.def(
+        "flow_matvec",
+        [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, int8_t bound,
+           int ndim, int stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            ff::flow_matvec(o, i, vec_ptr(voxel_size), absolute, membrane,
+                            bending, bound, ndim, stream);
+        },
+        "out"_a, "inp"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a = 0.0, "membrane"_a = 0.0, "bending"_a = 0.0,
+        "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
+        "Apply a spatial regulariser to a vector flow field.");
+
+    m.def(
+        "flow_diag",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, int8_t bound,
+           int ndim, int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::flow_diag(o, vec_ptr(voxel_size), absolute, membrane, bending,
+                          bound, ndim, stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(), "absolute"_a = 0.0,
+        "membrane"_a = 0.0, "bending"_a = 0.0, "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "Diagonal (preconditioner) of the flow regulariser operator.");
 }
