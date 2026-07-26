@@ -77,6 +77,16 @@ resample = _core.resample
 restriction = _core.restriction
 spline_coeff = _core.spline_coeff
 
+pull = _core.pull
+push = _core.push
+count = _core.count
+grad = _core.grad
+
+field_matvec = _core.field_matvec
+field_diag = _core.field_diag
+flow_matvec = _core.flow_matvec
+flow_diag = _core.flow_diag
+
 # Shared enums + pure-Python argument-normalisation helpers, used by every
 # wrapper (numpy/torch/cupy) so the resample/spline-coeff argument handling
 # lives in one place. See ``fastfields.dlpack._helpers``.
