@@ -40,7 +40,7 @@ python -m pytest tests/ -q        # import from a neutral cwd
 `_fastfields_lib` Makefile **if missing**, copies them into
 `fastfields/dlpack/lib/`, and compiles the nanobind extension against them with
 an `$ORIGIN/lib` rpath. It respects `CXX` (default `clang++`); the extension is
-built `-std=c++17` even though the C++ libs are C++11.
+built `-std=c++17` (as are the C++ libs).
 
 ## Conventions & caveats
 - **PEP 420 namespace package**: this distribution ships only
