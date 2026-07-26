@@ -108,6 +108,51 @@ def test_sym_matvec():
         np.testing.assert_allclose(out, ref, rtol=1e-8, atol=1e-8)
 
 
+def test_shared_helpers():
+    """The pure-Python argument-normalisation helpers used by the wrappers."""
+    # order / bound accept int, enum or friendly name
+    assert ff.as_spline("cubic") == 3
+    assert ff.as_spline(ff.Spline.Linear) == 1
+    assert ff.as_bound("dct2") == int(ff.Bound.DCT2)
+    assert ff.as_bound("wrap") == int(ff.Bound.DFT)
+    for bad in ("nope", 99):
+        try:
+            ff.as_spline(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError from as_spline")
+
+    # ndim inference + range check
+    assert ff.infer_ndim(None, None, [4, 4]) == 2
+    assert ff.infer_ndim(None, 2.0, None) == 1
+    assert ff.infer_ndim(3, None, None) == 3
+    try:
+        ff.check_ndim(0, 2)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError from check_ndim")
+
+    # factor / shape -> output spatial shape
+    assert ff.normalize_shape(4, 2) == [4, 4]
+    assert ff.resolve_out_spatial((5,), 1, 2, None) == (10,)
+    assert ff.resolve_out_spatial((5, 5), 2, None, 10) == (10, 10)
+    assert ff.resolve_out_spatial((7,), 1, None, None) == (7,)  # identity
+
+    # anchor -> (per-dim scale, scalar shift), matching interpol.resize
+    assert ff.anchor_scale_shift("centers", (8,), (4,), 1) == ([7 / 3], 0.0)
+    assert ff.anchor_scale_shift("edges", (8,), (4,), 1) == ([2.0], 0.5)
+    assert ff.anchor_scale_shift("first", (8,), (4,), 1) == ([2.0], 0.0)
+    assert ff.anchor_scale_shift("last", (8,), (4,), 1) == ([2.0], 1.0)
+    try:
+        ff.anchor_scale_shift("nope", (8,), (4,), 1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError from anchor_scale_shift")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
