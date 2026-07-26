@@ -8,52 +8,5 @@ permissions:
   contents: read
 jobs:
   pytest:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]  # windows still disabled -> issue #8
-        python-version: ["3.9", "3.11", "3.12"]
-    # The C++ build that fastfields-dlpack needs is driven by clang++ on every
-    # OS; the per-OS steps below make sure a clang++ is on PATH.
-    env:
-      CXX: clang++
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          submodules: recursive
-          token: ${{ secrets.CI_SUBMODULE_TOKEN }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install build toolchain (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang
-      - name: Install build toolchain (macOS)
-        if: runner.os == 'macOS'
-        # clang++ ships with the Xcode Command Line Tools, already present on
-        # the macOS runners, so there is nothing to install here.
-        run: clang++ --version
-      - name: Install build toolchain (Windows)
-        if: runner.os == 'Windows'
-        # The C++ Makefiles are now Windows-portable: clang++ builds a .dll
-        # with no -fPIC/-soname, and the recipes run under git bash (shell:
-        # bash). LLVM provides clang++; make drives the Makefiles. This leg was
-        # red by design before that work landed; it may still need a live-CI
-        # iteration on the first real Windows run (DLL-search / import-library
-        # specifics can only be confirmed on the runner).
-        run: choco install -y llvm make
-      # TODO: the git+ install of fastfields-dlpack below does NOT fetch its
-      # submodules, so this cross-repo source build is fragile and will likely
-      # need a live-CI iteration (or installing from a wheel index once one
-      # exists). For fastfields-bind-py this step is skipped (it IS dlpack).
-      - name: Install fastfields-dlpack from source
-        if: ${{ github.event.repository.name != 'fastfields-bind-py' }}
-        run: pip install "fastfields-dlpack @ git+https://github.com/fastfields/fastfields-bind-py@main"
-      - name: Install package + test deps
-        run: pip install ".[test]"
-      - name: Run pytest
-        run: cd /tmp && python -m pytest ${{ github.workspace }}/tests -q
+    uses: fastfields/.github/.github/workflows/python-test.yml@main
+    secrets: inherit
