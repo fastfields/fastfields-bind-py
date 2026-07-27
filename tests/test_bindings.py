@@ -203,6 +203,36 @@ def test_field_diag_absolute():
     np.testing.assert_allclose(out[:, 1], 3.0, rtol=1e-10)
 
 
+def test_field_kernel_is_matvec_impulse_response():
+    # The per-channel field stencil equals field_matvec applied to a unit
+    # impulse in the interior (field channels are independent).
+    def check(kd, order, absolute, membrane, bending):
+        C = 2
+        ap = absolute
+        mp = membrane if order >= 2 else None
+        bp = bending if order >= 3 else None
+        K = np.zeros((kd, kd, C), np.float64)
+        ff.field_kernel(K, absolute=ap, membrane=mp, bending=bp,
+                        bound=3, ndim=2)
+        N, cc, half = 2 * kd + 1, kd, kd // 2
+        for c0 in range(C):
+            x = np.zeros((N, N, C))
+            x[cc, cc, c0] = 1.0
+            o = np.zeros((N, N, C))
+            ff.field_matvec(o, x, absolute=ap, membrane=mp, bending=bp,
+                            bound=3, ndim=2)
+            for a in range(kd):
+                for b in range(kd):
+                    for c in range(C):
+                        got = o[cc + a - half, cc + b - half, c]
+                        kern = K[a, b, c] if c == c0 else 0.0
+                        np.testing.assert_allclose(got, kern, atol=1e-10)
+
+    check(1, 1, [2.5, 1.5], None, None)
+    check(3, 2, [0.3, 0.4], [1.0, 0.7], None)
+    check(5, 3, [0.3, 0.4], [0.5, 0.6], [1.0, 0.8])
+
+
 def test_flow_matvec_absolute_is_scaling():
     # absolute-only flow regulariser scales the whole field by `absolute`.
     rng = np.random.default_rng(2)
