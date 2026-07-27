@@ -429,4 +429,18 @@ NB_MODULE(_core, m) {
         "shears"_a = 0.0, "div"_a = 0.0, "bound"_a = 3, "ndim"_a = 1,
         "nb_iter"_a = 1, "stream"_a = 0,
         "In-place relaxation sweeps solving (H + L) x = g for the flow field.");
+
+    m.def(
+        "flow_kernel",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::flow_kernel(o, vec_ptr(voxel_size), absolute, membrane,
+                            bending, shears, div, bound, ndim, stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(), "absolute"_a = 0.0,
+        "membrane"_a = 0.0, "bending"_a = 0.0, "shears"_a = 0.0, "div"_a = 0.0,
+        "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
+        "Materialise the Toeplitz convolution kernel of the flow regulariser.");
 }
