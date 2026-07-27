@@ -86,6 +86,7 @@ field_matvec = _core.field_matvec
 field_diag = _core.field_diag
 flow_matvec = _core.flow_matvec
 flow_diag = _core.flow_diag
+flow_relax = _core.flow_relax
 
 # Shared enums + pure-Python argument-normalisation helpers, used by every
 # wrapper (numpy/torch/cupy) so the resample/spline-coeff argument handling
