@@ -383,6 +383,25 @@ NB_MODULE(_core, m) {
         "stream"_a = 0,
         "Diagonal (preconditioner) of the field regulariser operator.");
 
+    m.def(
+        "field_kernel",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::field_kernel(o, vec_ptr(voxel_size), vec_ptr(absolute),
+                             vec_ptr(membrane), vec_ptr(bending), bound, ndim,
+                             stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "Materialise the Toeplitz convolution kernel of the field "
+        "regulariser.");
+
     // ----- reg_flow.h (vector flow field; scalar penalties) -----
     m.def(
         "flow_matvec",
