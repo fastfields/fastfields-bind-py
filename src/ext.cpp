@@ -387,28 +387,29 @@ NB_MODULE(_core, m) {
     m.def(
         "flow_matvec",
         [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
-           double absolute, double membrane, double bending, int8_t bound,
-           int ndim, int stream) {
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, int stream) {
             DLTensor o = to_dltensor(out), i = to_dltensor(inp);
             ff::flow_matvec(o, i, vec_ptr(voxel_size), absolute, membrane,
-                            bending, bound, ndim, stream);
+                            bending, shears, div, bound, ndim, stream);
         },
         "out"_a, "inp"_a, "voxel_size"_a.none() = nb::none(),
         "absolute"_a = 0.0, "membrane"_a = 0.0, "bending"_a = 0.0,
+        "shears"_a = 0.0, "div"_a = 0.0,
         "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
         "Apply a spatial regulariser to a vector flow field.");
 
     m.def(
         "flow_diag",
         [](arr out, std::optional<std::vector<double>> voxel_size,
-           double absolute, double membrane, double bending, int8_t bound,
-           int ndim, int stream) {
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, int stream) {
             DLTensor o = to_dltensor(out);
             ff::flow_diag(o, vec_ptr(voxel_size), absolute, membrane, bending,
-                          bound, ndim, stream);
+                          shears, div, bound, ndim, stream);
         },
         "out"_a, "voxel_size"_a.none() = nb::none(), "absolute"_a = 0.0,
-        "membrane"_a = 0.0, "bending"_a = 0.0, "bound"_a = 3, "ndim"_a = 1,
-        "stream"_a = 0,
+        "membrane"_a = 0.0, "bending"_a = 0.0, "shears"_a = 0.0, "div"_a = 0.0,
+        "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
         "Diagonal (preconditioner) of the flow regulariser operator.");
 }
