@@ -58,10 +58,10 @@ ignore = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/fastfields/fastfields-bind-py"
-Documentation = "https://fastfields.github.io/fastfields-bind-py/"
-Issues = "https://github.com/fastfields/fastfields-bind-py/issues"
-Repository = "https://github.com/fastfields/fastfields-bind-py"
+Homepage = "https://github.com/fastfields/fastfields-dlpack"
+Documentation = "https://fastfields.github.io/fastfields-dlpack/"
+Issues = "https://github.com/fastfields/fastfields-dlpack/issues"
+Repository = "https://github.com/fastfields/fastfields-dlpack"
 
 [tool.versioningit]
 default-version = "0+unknown"

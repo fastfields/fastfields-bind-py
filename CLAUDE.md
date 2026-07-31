@@ -1,11 +1,11 @@
-# fastfields-bind-py  (imports as `fastfields.dlpack`)
+# fastfields-dlpack  (imports as `fastfields.dlpack`)
 
 **nanobind** bindings from DLPack to the `fastfields-lib` C++/CUDA library. This
 is the base of the Python stack: the raw, in-place bindings that every friendly
 wrapper (numpy/cupy/torch/any) sits on.
 
 ```
-… ─ lib ─ bind-py ← (you are here) ─ {numpy,cupy,torch} ─ fastfields
+… ─ lib ─ dlpack ← (you are here) ─ {numpy,cupy,torch} ─ fastfields
 ```
 
 - Submodule `_fastfields_lib -> fastfields-lib` (symlink in dev; real submodule
