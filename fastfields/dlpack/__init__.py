@@ -81,6 +81,10 @@ pull = _core.pull
 push = _core.push
 count = _core.count
 grad = _core.grad
+pull_backward = _core.pull_backward
+push_backward = _core.push_backward
+count_backward = _core.count_backward
+grad_backward = _core.grad_backward
 
 field_matvec = _core.field_matvec
 field_diag = _core.field_diag
