@@ -212,15 +212,17 @@ def test_field_kernel_is_matvec_impulse_response():
         mp = membrane if order >= 2 else None
         bp = bending if order >= 3 else None
         K = np.zeros((kd, kd, C), np.float64)
-        ff.field_kernel(K, absolute=ap, membrane=mp, bending=bp,
-                        bound=3, ndim=2)
+        ff.field_kernel(
+            K, absolute=ap, membrane=mp, bending=bp, bound=3, ndim=2
+        )
         N, cc, half = 2 * kd + 1, kd, kd // 2
         for c0 in range(C):
             x = np.zeros((N, N, C))
             x[cc, cc, c0] = 1.0
             o = np.zeros((N, N, C))
-            ff.field_matvec(o, x, absolute=ap, membrane=mp, bending=bp,
-                            bound=3, ndim=2)
+            ff.field_matvec(
+                o, x, absolute=ap, membrane=mp, bending=bp, bound=3, ndim=2
+            )
             for a in range(kd):
                 for b in range(kd):
                     for c in range(C):
@@ -246,31 +248,51 @@ def test_flow_kernel_is_matvec_impulse_response():
     # The materialised stencil equals flow_matvec applied to a unit impulse,
     # windowed around it in the interior (translation-invariant there).
     def check(kd, a, m, b, s, d):
-        is_matrix = (s != 0.0 or d != 0.0)
+        is_matrix = s != 0.0 or d != 0.0
         C = 2
         kshape = (kd, kd, C, C) if is_matrix else (kd, kd, C)
         K = np.zeros(kshape, np.float64)
-        ff.flow_kernel(K, absolute=a, membrane=m, bending=b, shears=s, div=d,
-                       bound=3, ndim=2)
+        ff.flow_kernel(
+            K,
+            absolute=a,
+            membrane=m,
+            bending=b,
+            shears=s,
+            div=d,
+            bound=3,
+            ndim=2,
+        )
         N, cc, half = 2 * kd + 1, kd, kd // 2
         for j0 in range(C):
             x = np.zeros((N, N, C))
             x[cc, cc, j0] = 1.0
             o = np.zeros((N, N, C))
-            ff.flow_matvec(o, x, absolute=a, membrane=m, bending=b, shears=s,
-                           div=d, bound=3, ndim=2)
+            ff.flow_matvec(
+                o,
+                x,
+                absolute=a,
+                membrane=m,
+                bending=b,
+                shears=s,
+                div=d,
+                bound=3,
+                ndim=2,
+            )
             for aa in range(kd):
                 for bb in range(kd):
                     for i in range(C):
                         got = o[cc + aa - half, cc + bb - half, i]
-                        kern = (K[aa, bb, i, j0] if is_matrix
-                                else (K[aa, bb, i] if i == j0 else 0.0))
+                        kern = (
+                            K[aa, bb, i, j0]
+                            if is_matrix
+                            else (K[aa, bb, i] if i == j0 else 0.0)
+                        )
                         np.testing.assert_allclose(got, kern, atol=1e-10)
 
-    check(1, 2.5, 0, 0, 0, 0)       # absolute -> (1,1,2)
-    check(3, 0, 1.0, 0, 0, 0)       # membrane -> (3,3,2)
-    check(5, 0, 0, 1.0, 0, 0)       # bending  -> (5,5,2)
-    check(3, 0, 0, 0, 1.3, 0.7)     # lame     -> (3,3,2,2)
+    check(1, 2.5, 0, 0, 0, 0)  # absolute -> (1,1,2)
+    check(3, 0, 1.0, 0, 0, 0)  # membrane -> (3,3,2)
+    check(5, 0, 0, 1.0, 0, 0)  # bending  -> (5,5,2)
+    check(3, 0, 0, 0, 1.3, 0.7)  # lame     -> (3,3,2,2)
     check(5, 0.3, 0.5, 0.4, 1.3, 0.7)  # all    -> (5,5,2,2)
 
 
