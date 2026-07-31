@@ -1,0 +1,5 @@
+# `_versioning.py` is not part of any package, but versioningit imports it from
+# the project root at build time (see [tool.versioningit] in pyproject.toml).
+# Without this it would be missing from the sdist and any sdist -> wheel build
+# would fail to resolve the custom tag2version/format hooks.
+include _versioning.py

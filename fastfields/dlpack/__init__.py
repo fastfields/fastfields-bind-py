@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re as _re
 import sys
 
 _this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +56,59 @@ def _preload_native_libs() -> None:
 _preload_native_libs()
 
 from . import _core  # noqa: E402  (must follow the preload above)
+
+# -- version + compute backend ---------------------------------------------
+# ``_version.py`` is generated at build time by versioningit; a bare source
+# tree that was never built has no such file.
+try:
+    from ._version import __version__
+except ImportError:  # pragma: no cover - source tree without a build
+    __version__ = "0+unknown"
+
+
+_BACKEND_RE = _re.compile(r"\A(cpu|cu[0-9]+)\Z")
+
+
+def _parse_backend(version: str) -> str | None:
+    """Extract the compute-backend label from a PEP 440 version string.
+
+    This distribution is the only backend-specific one in the stack (it ships
+    the compiled ``libfastfields*``), and it records which build it is in the
+    version's *local* segment, PyTorch-style: ``0.0.0.dev1+cpu``. A build made
+    off-tag carries the git distance in the same segment
+    (``0.0.0.dev1+cpu.3.gdeadbee``), so only the leading component is the
+    backend.
+
+    Parameters
+    ----------
+    version : str
+        A PEP 440 version string.
+
+    Returns
+    -------
+    str or None
+        ``"cpu"``, ``"cu128"``, ... or ``None`` for a build with no backend
+        label (e.g. an unversioned source checkout).
+    """
+    try:
+        from packaging.version import InvalidVersion, parse
+    except ImportError:  # pragma: no cover - packaging always installed
+        return None
+    try:
+        local = parse(version).local
+    except InvalidVersion:  # pragma: no cover
+        return None
+    if not local:
+        return None
+    head = local.split(".")[0]
+    return head if _BACKEND_RE.match(head) else None
+
+
+#: Compute backend this build of the native libraries was compiled for --
+#: ``"cpu"``, ``"cu128"``, ... or ``None`` if unknown. Mirrors the role of
+#: ``torch.version.cuda``: a friendly derived attribute so callers never have
+#: to parse ``__version__`` themselves.
+backend = _parse_backend(__version__)
 
 # Re-export every binding under its pythonic (== ff::) name.
 dt_euclidean = _core.dt_euclidean
@@ -106,6 +160,8 @@ from ._helpers import (  # noqa: E402
 )
 
 __all__ = [
+    "__version__",
+    "backend",
     "dt_euclidean",
     "dt_l1",
     "dt_spline_table",
