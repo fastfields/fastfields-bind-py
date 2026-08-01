@@ -1,10 +1,10 @@
 [project]
-site_name = "fastfields-bind-py"
+site_name = "fastfields-dlpack"
 site_description = "nanobind bindings from DLPack to the fastfields-lib C++ library (fastfields.dlpack)"
 site_author = "Yaël Balbastre"
-site_url = "https://fastfields.github.io/fastfields-bind-py/"
-repo_url = "https://github.com/fastfields/fastfields-bind-py"
-repo_name = "fastfields/fastfields-bind-py"
+site_url = "https://fastfields.github.io/fastfields-dlpack/"
+repo_url = "https://github.com/fastfields/fastfields-dlpack"
+repo_name = "fastfields/fastfields-dlpack"
 copyright = "Copyright &copy; 2026 The fastfields authors"
 nav = [
   {"fastfields home" = "https://fastfields.github.io/"},

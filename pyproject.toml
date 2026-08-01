@@ -26,7 +26,11 @@ classifiers = [
     "Typing :: Typed",
 ]
 dynamic = ["version"]
-dependencies = []
+dependencies = [
+    # `packaging` parses __version__ to expose the compute backend as
+    # `fastfields.dlpack.backend` (see fastfields/dlpack/__init__.py).
+    "packaging",
+]
 
 [project.optional-dependencies]
 test = ["numpy", "pytest"]
@@ -58,10 +62,10 @@ ignore = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/fastfields/fastfields-bind-py"
-Documentation = "https://fastfields.github.io/fastfields-bind-py/"
-Issues = "https://github.com/fastfields/fastfields-bind-py/issues"
-Repository = "https://github.com/fastfields/fastfields-bind-py"
+Homepage = "https://github.com/fastfields/fastfields-dlpack"
+Documentation = "https://fastfields.github.io/fastfields-dlpack/"
+Issues = "https://github.com/fastfields/fastfields-dlpack/issues"
+Repository = "https://github.com/fastfields/fastfields-dlpack"
 
 [tool.versioningit]
 default-version = "0+unknown"
@@ -69,10 +73,20 @@ default-version = "0+unknown"
 [tool.versioningit.vcs]
 default-tag = "0.1"
 
+# The compute backend is stamped into the PEP 440 local version identifier
+# (PyTorch convention: 0.0.0.dev1+cpu), driven by $FF_WHEEL_VARIANT at build
+# time. Both steps are custom because versioningit skips `format` entirely when
+# the checkout is exactly at a tag -- which is precisely the release case -- so
+# the label has to be applied in `tag2version`, and `format` then exists only
+# to fold the variant and the distance suffix into the single local segment
+# PEP 440 allows. See _versioning.py for the full rationale.
+[tool.versioningit.tag2version]
+module = "_versioning"
+value = "tag2version"
+
 [tool.versioningit.format]
-distance = "{base_version}+{distance}.{vcs}{rev}"
-dirty = "{base_version}+{distance}.{vcs}{rev}.dirty"
-distance-dirty = "{base_version}+{distance}.{vcs}{rev}.dirty"
+module = "_versioning"
+value = "format"
 
 [tool.versioningit.write]
 file = "fastfields/dlpack/_version.py"
