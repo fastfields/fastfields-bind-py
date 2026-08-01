@@ -142,6 +142,7 @@ grad_backward = _core.grad_backward
 
 field_matvec = _core.field_matvec
 field_diag = _core.field_diag
+field_relax = _core.field_relax
 field_kernel = _core.field_kernel
 flow_matvec = _core.flow_matvec
 flow_diag = _core.flow_diag
