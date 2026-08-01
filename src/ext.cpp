@@ -467,6 +467,119 @@ NB_MODULE(_core, m) {
         "Materialise the Toeplitz convolution kernel of the field "
         "regulariser.");
 
+    // --- in-place accumulate variants (restored jitfields op '+'/'-') ---
+    m.def(
+        "field_matvec_add_",
+        [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            ff::field_matvec_add_(o, i, vec_ptr(voxel_size), vec_ptr(absolute),
+                                 vec_ptr(membrane), vec_ptr(bending), bound,
+                                 ndim, stream);
+        },
+        "out"_a, "inp"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "In-place: out += L(inp) for a multi-channel field. Accumulates into "
+        "the caller's `out` (jitfields op '+'); out-of-place is a caller-side "
+        "copy of `out` followed by this call.");
+
+    m.def(
+        "field_matvec_sub_",
+        [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            ff::field_matvec_sub_(o, i, vec_ptr(voxel_size), vec_ptr(absolute),
+                                 vec_ptr(membrane), vec_ptr(bending), bound,
+                                 ndim, stream);
+        },
+        "out"_a, "inp"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "In-place: out -= L(inp) for a multi-channel field. Accumulates into "
+        "the caller's `out` (jitfields op '-'); out-of-place is a caller-side "
+        "copy of `out` followed by this call.");
+
+    m.def(
+        "field_diag_add_",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::field_diag_add_(o, vec_ptr(voxel_size), vec_ptr(absolute),
+                               vec_ptr(membrane), vec_ptr(bending), bound, ndim,
+                               stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "In-place: out += diag(L) of the field regulariser (jitfields op '+').");
+
+    m.def(
+        "field_diag_sub_",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::field_diag_sub_(o, vec_ptr(voxel_size), vec_ptr(absolute),
+                               vec_ptr(membrane), vec_ptr(bending), bound, ndim,
+                               stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "In-place: out -= diag(L) of the field regulariser (jitfields op '-').");
+
+    m.def(
+        "field_kernel_add_",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::field_kernel_add_(o, vec_ptr(voxel_size), vec_ptr(absolute),
+                               vec_ptr(membrane), vec_ptr(bending), bound, ndim,
+                               stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "In-place: out += the stencil K of the field regulariser (jitfields op '+').");
+
+    m.def(
+        "field_kernel_sub_",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::field_kernel_sub_(o, vec_ptr(voxel_size), vec_ptr(absolute),
+                               vec_ptr(membrane), vec_ptr(bending), bound, ndim,
+                               stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "In-place: out -= the stencil K of the field regulariser (jitfields op '-').");
+
     // ----- reg_flow.h (vector flow field; scalar penalties) -----
     m.def(
         "flow_matvec",
@@ -527,4 +640,91 @@ NB_MODULE(_core, m) {
         "membrane"_a = 0.0, "bending"_a = 0.0, "shears"_a = 0.0, "div"_a = 0.0,
         "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
         "Materialise the Toeplitz convolution kernel of the flow regulariser.");
+
+    // --- in-place accumulate variants (restored jitfields op '+'/'-') ---
+    m.def(
+        "flow_matvec_add_",
+        [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, int stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            ff::flow_matvec_add_(o, i, vec_ptr(voxel_size), absolute, membrane,
+                                bending, shears, div, bound, ndim, stream);
+        },
+        "out"_a, "inp"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a = 0.0, "membrane"_a = 0.0, "bending"_a = 0.0,
+        "shears"_a = 0.0, "div"_a = 0.0,
+        "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
+        "In-place: out += L(inp) for a vector flow field (jitfields op '+').");
+
+    m.def(
+        "flow_matvec_sub_",
+        [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, int stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            ff::flow_matvec_sub_(o, i, vec_ptr(voxel_size), absolute, membrane,
+                                bending, shears, div, bound, ndim, stream);
+        },
+        "out"_a, "inp"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a = 0.0, "membrane"_a = 0.0, "bending"_a = 0.0,
+        "shears"_a = 0.0, "div"_a = 0.0,
+        "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
+        "In-place: out -= L(inp) for a vector flow field (jitfields op '-').");
+
+    m.def(
+        "flow_diag_add_",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::flow_diag_add_(o, vec_ptr(voxel_size), absolute, membrane,
+                              bending, shears, div, bound, ndim, stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(), "absolute"_a = 0.0,
+        "membrane"_a = 0.0, "bending"_a = 0.0, "shears"_a = 0.0, "div"_a = 0.0,
+        "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
+        "In-place: out += diag(L) of the flow regulariser (jitfields op '+').");
+
+    m.def(
+        "flow_diag_sub_",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::flow_diag_sub_(o, vec_ptr(voxel_size), absolute, membrane,
+                              bending, shears, div, bound, ndim, stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(), "absolute"_a = 0.0,
+        "membrane"_a = 0.0, "bending"_a = 0.0, "shears"_a = 0.0, "div"_a = 0.0,
+        "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
+        "In-place: out -= diag(L) of the flow regulariser (jitfields op '-').");
+
+    m.def(
+        "flow_kernel_add_",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::flow_kernel_add_(o, vec_ptr(voxel_size), absolute, membrane,
+                              bending, shears, div, bound, ndim, stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(), "absolute"_a = 0.0,
+        "membrane"_a = 0.0, "bending"_a = 0.0, "shears"_a = 0.0, "div"_a = 0.0,
+        "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
+        "In-place: out += the stencil K of the flow regulariser (jitfields op '+').");
+
+    m.def(
+        "flow_kernel_sub_",
+        [](arr out, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, int stream) {
+            DLTensor o = to_dltensor(out);
+            ff::flow_kernel_sub_(o, vec_ptr(voxel_size), absolute, membrane,
+                              bending, shears, div, bound, ndim, stream);
+        },
+        "out"_a, "voxel_size"_a.none() = nb::none(), "absolute"_a = 0.0,
+        "membrane"_a = 0.0, "bending"_a = 0.0, "shears"_a = 0.0, "div"_a = 0.0,
+        "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
+        "In-place: out -= the stencil K of the flow regulariser (jitfields op '-').");
 }
