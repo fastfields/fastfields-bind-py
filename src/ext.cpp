@@ -343,6 +343,71 @@ NB_MODULE(_core, m) {
         "Sample spatial gradients of a spline-encoded volume. "
         "out (*batch,*outshape,C,D).");
 
+    // ----- pushpull.h : backward passes -----
+    // Adjoints wrt *both* the field and the sampling coordinates. `out` is
+    // the gradient wrt the forward `inp`, `gout` the gradient wrt `grid`,
+    // `ginp` the incoming gradient (shaped like the forward op's output).
+    // Pre-zero `out`: pull_backward / grad_backward scatter into it.
+    m.def(
+        "pull_backward",
+        [](arr out, arr gout, arr inp, arr ginp, arr grid, int8_t spline,
+           int8_t bound, int8_t extrapolate, int stream) {
+            DLTensor o = to_dltensor(out), go = to_dltensor(gout),
+                     i = to_dltensor(inp), gi = to_dltensor(ginp),
+                     g = to_dltensor(grid);
+            ff::pull_backward(o, go, i, gi, g, spline, bound, extrapolate,
+                              stream);
+        },
+        "out"_a, "gout"_a, "inp"_a, "ginp"_a, "grid"_a, "spline"_a = 2,
+        "bound"_a = 3, "extrapolate"_a = 1, "stream"_a = 0,
+        "Adjoint of pull. out (*batch,*inshape,C) is accumulated into and "
+        "must be pre-zeroed; gout (*batch,*outshape,D) is overwritten; "
+        "ginp (*batch,*outshape,C).");
+
+    m.def(
+        "push_backward",
+        [](arr out, arr gout, arr inp, arr ginp, arr grid, int8_t spline,
+           int8_t bound, int8_t extrapolate, int stream) {
+            DLTensor o = to_dltensor(out), go = to_dltensor(gout),
+                     i = to_dltensor(inp), gi = to_dltensor(ginp),
+                     g = to_dltensor(grid);
+            ff::push_backward(o, go, i, gi, g, spline, bound, extrapolate,
+                              stream);
+        },
+        "out"_a, "gout"_a, "inp"_a, "ginp"_a, "grid"_a, "spline"_a = 2,
+        "bound"_a = 3, "extrapolate"_a = 1, "stream"_a = 0,
+        "Adjoint of push. out (*batch,*outshape,C) and gout "
+        "(*batch,*outshape,D) are overwritten; ginp (*batch,*inshape,C).");
+
+    m.def(
+        "count_backward",
+        [](arr gout, arr ginp, arr grid, int8_t spline, int8_t bound,
+           int8_t extrapolate, int stream) {
+            DLTensor go = to_dltensor(gout), gi = to_dltensor(ginp),
+                     g = to_dltensor(grid);
+            ff::count_backward(go, gi, g, spline, bound, extrapolate, stream);
+        },
+        "gout"_a, "ginp"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3,
+        "extrapolate"_a = 1, "stream"_a = 0,
+        "Adjoint of count wrt grid. gout (*batch,*outshape,D) is "
+        "overwritten; ginp (*batch,*inshape,1).");
+
+    m.def(
+        "grad_backward",
+        [](arr out, arr gout, arr inp, arr ginp, arr grid, int8_t spline,
+           int8_t bound, int8_t extrapolate, bool abs, int stream) {
+            DLTensor o = to_dltensor(out), go = to_dltensor(gout),
+                     i = to_dltensor(inp), gi = to_dltensor(ginp),
+                     g = to_dltensor(grid);
+            ff::grad_backward(o, go, i, gi, g, spline, bound, extrapolate,
+                              abs, stream);
+        },
+        "out"_a, "gout"_a, "inp"_a, "ginp"_a, "grid"_a, "spline"_a = 2,
+        "bound"_a = 3, "extrapolate"_a = 1, "abs"_a = false, "stream"_a = 0,
+        "Adjoint of grad. out (*batch,*inshape,C) is accumulated into and "
+        "must be pre-zeroed; gout (*batch,*outshape,D) is overwritten; "
+        "ginp (*batch,*outshape,C,D). `abs` must match the forward call.");
+
     // ----- reg_field.h (multi-channel field; per-channel penalty vectors) -----
     // voxel_size is a length-ndim sequence; absolute/membrane/bending are
     // length-C sequences (any may be omitted -> that penalty is disabled).
