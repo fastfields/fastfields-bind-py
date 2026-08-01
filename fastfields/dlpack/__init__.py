@@ -148,6 +148,23 @@ flow_diag = _core.flow_diag
 flow_relax = _core.flow_relax
 flow_kernel = _core.flow_kernel
 
+# In-place-only accumulate primitives (jitfields op '+' / '-'). These
+# read-modify-write the caller's `out`; the trailing underscore marks that, as
+# for sym_addmatvec_ / sym_submatvec_. There is no out-of-place counterpart at
+# this level -- the numpy/torch/cupy wrappers get it by cloning first.
+field_addmatvec_ = _core.field_addmatvec_
+field_submatvec_ = _core.field_submatvec_
+field_adddiag_ = _core.field_adddiag_
+field_subdiag_ = _core.field_subdiag_
+field_addkernel_ = _core.field_addkernel_
+field_subkernel_ = _core.field_subkernel_
+flow_addmatvec_ = _core.flow_addmatvec_
+flow_submatvec_ = _core.flow_submatvec_
+flow_adddiag_ = _core.flow_adddiag_
+flow_subdiag_ = _core.flow_subdiag_
+flow_addkernel_ = _core.flow_addkernel_
+flow_subkernel_ = _core.flow_subkernel_
+
 # Shared enums + pure-Python argument-normalisation helpers, used by every
 # wrapper (numpy/torch/cupy) so the resample/spline-coeff argument handling
 # lives in one place. See ``fastfields.dlpack._helpers``.
