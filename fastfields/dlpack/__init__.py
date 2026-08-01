@@ -152,18 +152,18 @@ flow_kernel = _core.flow_kernel
 # read-modify-write the caller's `out`; the trailing underscore marks that, as
 # for sym_addmatvec_ / sym_submatvec_. There is no out-of-place counterpart at
 # this level -- the numpy/torch/cupy wrappers get it by cloning first.
-field_matvec_add_ = _core.field_matvec_add_
-field_matvec_sub_ = _core.field_matvec_sub_
-field_diag_add_ = _core.field_diag_add_
-field_diag_sub_ = _core.field_diag_sub_
-field_kernel_add_ = _core.field_kernel_add_
-field_kernel_sub_ = _core.field_kernel_sub_
-flow_matvec_add_ = _core.flow_matvec_add_
-flow_matvec_sub_ = _core.flow_matvec_sub_
-flow_diag_add_ = _core.flow_diag_add_
-flow_diag_sub_ = _core.flow_diag_sub_
-flow_kernel_add_ = _core.flow_kernel_add_
-flow_kernel_sub_ = _core.flow_kernel_sub_
+field_addmatvec_ = _core.field_addmatvec_
+field_submatvec_ = _core.field_submatvec_
+field_adddiag_ = _core.field_adddiag_
+field_subdiag_ = _core.field_subdiag_
+field_addkernel_ = _core.field_addkernel_
+field_subkernel_ = _core.field_subkernel_
+flow_addmatvec_ = _core.flow_addmatvec_
+flow_submatvec_ = _core.flow_submatvec_
+flow_adddiag_ = _core.flow_adddiag_
+flow_subdiag_ = _core.flow_subdiag_
+flow_addkernel_ = _core.flow_addkernel_
+flow_subkernel_ = _core.flow_subkernel_
 
 # Shared enums + pure-Python argument-normalisation helpers, used by every
 # wrapper (numpy/torch/cupy) so the resample/spline-coeff argument handling
