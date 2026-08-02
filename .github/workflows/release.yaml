@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   release:
-    uses: fastfields/.github/.github/workflows/python-release.yml@main
+    uses: fastfields/.github/.github/workflows/python-release.yml@claude/18-cache-native-build
     with:
       tag: ${{ github.event.release.tag_name || inputs.tag }}
       compiled: true
