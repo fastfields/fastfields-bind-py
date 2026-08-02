@@ -2,7 +2,7 @@
 
 **nanobind** bindings from DLPack to the `fastfields-lib` C++/CUDA library. This
 is the base of the Python stack: the raw, in-place bindings that every friendly
-wrapper (numpy/cupy/torch/any) sits on.
+wrapper (numpy/cupy/torch/auto) sits on.
 
 ```
 … ─ lib ─ dlpack ← (you are here) ─ {numpy,cupy,torch} ─ fastfields
