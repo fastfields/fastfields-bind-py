@@ -7,6 +7,12 @@ name: tmp-smoke-test
 # runner (which has normal network access) is the only way to observe it.
 
 on:
+  # push (not just workflow_dispatch): a workflow_dispatch-only workflow isn't
+  # API-dispatchable until it exists on the default branch, which this
+  # throwaway file deliberately never will. push fires directly off this
+  # branch's head, no registration needed.
+  push:
+    branches: [claude/validate-native-build-cache]
   workflow_dispatch:
     inputs:
       run_id:
@@ -25,17 +31,23 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    env:
+      # push events don't populate `inputs.*`, so fall back to the fixed
+      # defaults this throwaway file is only ever meant to test against.
+      RUN_ID: ${{ inputs.run_id || '30766596649' }}
+      ARTIFACT_NAME: ${{ inputs.artifact_name || 'dist-cpu-ubuntu-latest-cp311' }}
+      PY_VERSION: ${{ inputs.python_version || '3.11' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.artifact_name }}
-          run-id: ${{ inputs.run_id }}
+          name: ${{ env.ARTIFACT_NAME }}
+          run-id: ${{ env.RUN_ID }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: dist
       - run: ls -l dist
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ inputs.python_version }}
+          python-version: ${{ env.PY_VERSION }}
       - run: pip install numpy
       - name: Install the wheel
         run: pip install dist/*.whl
