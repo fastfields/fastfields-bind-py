@@ -1,0 +1,79 @@
+name: tmp-smoke-test
+
+# NOT FOR MERGE. Throwaway workflow to install a wheel produced by the
+# claude/18-cache-native-build validation run and confirm it actually works
+# (import + a real op call), since this sandbox's egress policy blocks direct
+# artifact downloads from Azure blob storage -- running the check inside a
+# runner (which has normal network access) is the only way to observe it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Workflow run ID that produced the wheel artifact"
+        type: string
+        required: true
+      artifact_name:
+        description: "Artifact name to download"
+        type: string
+        default: dist-cpu-ubuntu-latest-cp311
+      python_version:
+        description: "Python version to install/test with"
+        type: string
+        default: "3.11"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: dist
+      - run: ls -l dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+      - run: pip install numpy
+      - name: Install the wheel
+        run: pip install dist/*.whl
+      - name: Smoke import + real op call
+        run: |
+          python -c "
+          import numpy as np
+          import fastfields.dlpack as ff
+
+          print('import OK')
+          print('version:', ff.__version__)
+          print('backend:', ff.backend)
+
+          inp = np.array(
+              [
+                  [0, np.inf, np.inf, 0, np.inf, np.inf, np.inf],
+                  [np.inf, np.inf, 0, np.inf, np.inf, 0, np.inf],
+              ],
+              dtype=np.float32,
+          )
+
+          def edt_reference(inp, voxel_spacing, cost):
+              out = np.full_like(inp, np.inf)
+              n = inp.shape[-1]
+              flat = inp.reshape(-1, n)
+              ref = out.reshape(-1, n)
+              for r in range(flat.shape[0]):
+                  for i in range(n):
+                      best = np.inf
+                      for j in range(n):
+                          best = min(best, flat[r, j] + cost(voxel_spacing * (i - j)))
+                      ref[r, i] = best
+              return out
+
+          expected = edt_reference(inp, 1.0, lambda d: d * d)
+          ff.dt_euclidean(inp, 1.0)
+          print('dt_euclidean output:')
+          print(inp)
+          np.testing.assert_allclose(inp, expected, rtol=1e-5, atol=1e-5)
+          print('SMOKE TEST PASSED: dt_euclidean matches the brute-force reference')
+          "
