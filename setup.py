@@ -1,7 +1,9 @@
 """Manual (no-CMake) build for fastfields_bind.
 
 Custom build_ext that:
-  1. builds the fastfields-lib shared libraries (via its Makefile) if missing,
+  1. builds the fastfields-lib shared libraries (via its Makefile) if missing
+     -- or, if ``FASTFIELDS_PREBUILT_LIB`` is set, copies them in from there
+     instead of invoking ``make`` at all (see ``PREBUILT_LIB_DIR`` below),
   2. copies libfastfields.so + libfastfields-cpu.so into fastfields_bind/lib/,
   3. compiles the nanobind extension (src/ext.cpp + nb_combined.cpp) against
      ./fastfields, linking -lfastfields with an $ORIGIN/lib rpath,
@@ -13,6 +15,12 @@ package it builds is the PEP 420 namespace subpackage ``fastfields.dlpack``
 (the compiled extension imports as ``fastfields.dlpack._core``); no
 ``fastfields/__init__.py`` is created, so other distributions can merge into
 the same ``fastfields`` namespace.
+
+Note that the extension itself (step 3) still compiles against the C++
+*headers* under ``./_fastfields_lib``, so that source tree must still be
+present (submodule checked out / symlinked) even when the compiled .so files
+come from ``FASTFIELDS_PREBUILT_LIB`` -- only the expensive templated
+``make`` build of the .so files is skipped.
 """
 
 from __future__ import annotations
@@ -56,6 +64,14 @@ CPU_LIB_PATH = os.path.join(FASTFIELDS_BUILD, "lib", CPU_LIB)
 
 CXX = os.environ.get("CXX", "clang++")
 
+# Opt-in fast path for CI: if set, points at a directory already containing
+# MAIN_LIB/CPU_LIB (built once, out of band -- e.g. the wheel-build workflow's
+# `build-native` job, shared across every Python-version job in its matrix
+# instead of each of them re-running `make`). When unset, behaviour is exactly
+# the from-source build below, so local/dev installs and this repo's own
+# non-release test CI are unaffected.
+PREBUILT_LIB_DIR = os.environ.get("FASTFIELDS_PREBUILT_LIB")
+
 
 def _nanobind_paths():
     import nanobind
@@ -78,6 +94,9 @@ class BuildExt(build_ext):
     def _ensure_fastfields_libs(self):
         if os.path.exists(MAIN_LIB_PATH) and os.path.exists(CPU_LIB_PATH):
             return
+        if PREBUILT_LIB_DIR:
+            self._use_prebuilt_libs()
+            return
         if not os.path.isdir(FASTFIELDS_DIR):
             raise RuntimeError(
                 f"fastfields source tree not found at {FASTFIELDS_DIR!r}. "
@@ -91,6 +110,24 @@ class BuildExt(build_ext):
             raise RuntimeError(
                 "fastfields-lib build did not produce the expected .so files"
             )
+
+    # -- step 1b: or copy them in from a pre-built directory (CI fast path) --
+    def _use_prebuilt_libs(self):
+        print(
+            f"[fastfields_bind] using prebuilt libs from "
+            f"{PREBUILT_LIB_DIR!r} (FASTFIELDS_PREBUILT_LIB); skipping make"
+        )
+        os.makedirs(os.path.dirname(MAIN_LIB_PATH), exist_ok=True)
+        os.makedirs(os.path.dirname(CPU_LIB_PATH), exist_ok=True)
+        for name, dst in ((MAIN_LIB, MAIN_LIB_PATH), (CPU_LIB, CPU_LIB_PATH)):
+            src = os.path.join(PREBUILT_LIB_DIR, name)
+            if not os.path.exists(src):
+                raise RuntimeError(
+                    f"FASTFIELDS_PREBUILT_LIB={PREBUILT_LIB_DIR!r} is set but "
+                    f"{src!r} does not exist"
+                )
+            shutil.copyfile(src, dst)
+            shutil.copymode(src, dst)
 
     # -- step 2: ship the libraries inside the package -----------------------
     def _copy_libs_into_package(self):
