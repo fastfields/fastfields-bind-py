@@ -449,6 +449,27 @@ NB_MODULE(_core, m) {
         "Diagonal (preconditioner) of the field regulariser operator.");
 
     m.def(
+        "field_relax",
+        [](arr sol, arr hes, arr grd,
+           std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int nb_iter, int stream) {
+            DLTensor s = to_dltensor(sol), h = to_dltensor(hes),
+                     g = to_dltensor(grd);
+            ff::field_relax(s, h, g, vec_ptr(voxel_size), vec_ptr(absolute),
+                            vec_ptr(membrane), vec_ptr(bending), bound, ndim,
+                            nb_iter, stream);
+        },
+        "sol"_a, "hes"_a, "grd"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "nb_iter"_a = 1, "stream"_a = 0,
+        "In-place relaxation sweeps solving (H + L) x = g for a "
+        "multi-channel field.");
+
+    m.def(
         "field_kernel",
         [](arr out, std::optional<std::vector<double>> voxel_size,
            std::optional<std::vector<double>> absolute,

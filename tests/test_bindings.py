@@ -235,6 +235,53 @@ def test_field_kernel_is_matvec_impulse_response():
     check(5, 3, [0.3, 0.4], [0.5, 0.6], [1.0, 0.8])
 
 
+def test_field_relax_reduces_residual():
+    # field_relax refines `sol` in place towards (H + L) x = g. Check the
+    # residual against a field_matvec/sym_matvec-derived reference: it must
+    # shrink monotonically with the sweep count and converge to ~0.
+    rng = np.random.default_rng(3)
+    N, C = 12, 2
+    absolute, membrane = [0.4, 0.6], [1.0, 0.8]
+    # SPD compact-symmetric Hessian: diagonal-dominant (diag, then off-diag).
+    hes = np.stack(
+        [
+            2.0 + rng.random((N, N)),
+            2.0 + rng.random((N, N)),
+            0.5 * (rng.random((N, N)) - 0.5),
+        ],
+        axis=-1,
+    )
+    grd = rng.standard_normal((N, N, C))
+
+    def residual(x):
+        r = np.zeros_like(x)
+        ff.sym_matvec(r, hes, x)  # H @ x
+        lx = np.zeros_like(x)
+        ff.field_matvec(
+            lx, x, absolute=absolute, membrane=membrane, bound=3, ndim=2
+        )
+        return np.abs(r + lx - grd).max()
+
+    prev = residual(np.zeros((N, N, C)))
+    sol = np.zeros((N, N, C))
+    for _ in range(6):
+        out = ff.field_relax(
+            sol,
+            hes,
+            grd,
+            absolute=absolute,
+            membrane=membrane,
+            bound=3,
+            ndim=2,
+            nb_iter=8,
+        )
+        assert out is None  # in-place, mutates `sol`
+        cur = residual(sol)
+        assert cur < prev
+        prev = cur
+    assert prev < 1e-8
+
+
 def test_flow_matvec_absolute_is_scaling():
     # absolute-only flow regulariser scales the whole field by `absolute`.
     rng = np.random.default_rng(2)
