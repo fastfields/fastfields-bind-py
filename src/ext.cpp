@@ -488,6 +488,72 @@ NB_MODULE(_core, m) {
         "Materialise the Toeplitz convolution kernel of the field "
         "regulariser.");
 
+    // --- RLS/JRLS (weighted) variants ---
+    // `wgt` selects the mode via its trailing dimension: 1 (shared across all
+    // channels, RLS) or C (genuine per-channel weight, JRLS).
+    m.def(
+        "field_matvec_rls",
+        [](arr out, arr inp, arr wgt,
+           std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           intptr_t stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
+                     w = to_dltensor(wgt);
+            ff::field_matvec_rls(o, i, w, vec_ptr(voxel_size),
+                                 vec_ptr(absolute), vec_ptr(membrane),
+                                 vec_ptr(bending), bound, ndim, stream);
+        },
+        "out"_a, "inp"_a, "wgt"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "RLS/JRLS-weighted variant of field_matvec: `wgt` is "
+        "(*batch,*spatial,1) for RLS or (*batch,*spatial,C) for JRLS.");
+
+    m.def(
+        "field_diag_rls",
+        [](arr out, arr wgt, std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           intptr_t stream) {
+            DLTensor o = to_dltensor(out), w = to_dltensor(wgt);
+            ff::field_diag_rls(o, w, vec_ptr(voxel_size), vec_ptr(absolute),
+                               vec_ptr(membrane), vec_ptr(bending), bound,
+                               ndim, stream);
+        },
+        "out"_a, "wgt"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "Diagonal (preconditioner) of the RLS/JRLS-weighted field "
+        "regulariser operator, same `wgt` conventions as field_matvec_rls.");
+
+    m.def(
+        "field_relax_rls",
+        [](arr sol, arr hes, arr grd, arr wgt,
+           std::optional<std::vector<double>> voxel_size,
+           std::optional<std::vector<double>> absolute,
+           std::optional<std::vector<double>> membrane,
+           std::optional<std::vector<double>> bending, int8_t bound, int ndim,
+           int nb_iter, intptr_t stream) {
+            DLTensor s = to_dltensor(sol), h = to_dltensor(hes),
+                     g = to_dltensor(grd), w = to_dltensor(wgt);
+            ff::field_relax_rls(s, h, g, w, vec_ptr(voxel_size),
+                                vec_ptr(absolute), vec_ptr(membrane),
+                                vec_ptr(bending), bound, ndim, nb_iter,
+                                stream);
+        },
+        "sol"_a, "hes"_a, "grd"_a, "wgt"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a.none() = nb::none(), "membrane"_a.none() = nb::none(),
+        "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
+        "nb_iter"_a = 1, "stream"_a = 0,
+        "In-place RLS/JRLS-weighted relaxation sweeps solving (H + L(w)) x = "
+        "g for a multi-channel field, same `wgt` conventions as "
+        "field_matvec_rls.");
+
     // --- in-place accumulate variants (restored jitfields op '+'/'-') ---
     m.def(
         "field_addmatvec_",
