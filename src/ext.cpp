@@ -489,8 +489,10 @@ NB_MODULE(_core, m) {
         "regulariser.");
 
     // --- RLS/JRLS (weighted) variants ---
-    // `wgt` selects the mode via its trailing dimension: 1 (shared across all
-    // channels, RLS) or C (genuine per-channel weight, JRLS).
+    // `wgt` selects the mode via its trailing dimension: 1 (one weight shared
+    // -- "joint" -- across all channels, JRLS) or C (genuine per-channel
+    // weight, RLS). This is the jitfields/nitorch convention; see
+    // fastfields-cpu-lib#65, where the dispatch predicate had it backwards.
     m.def(
         "field_matvec_rls",
         [](arr out, arr inp, arr wgt,
@@ -510,7 +512,8 @@ NB_MODULE(_core, m) {
         "bending"_a.none() = nb::none(), "bound"_a = 3, "ndim"_a = 1,
         "stream"_a = 0,
         "RLS/JRLS-weighted variant of field_matvec: `wgt` is "
-        "(*batch,*spatial,1) for RLS or (*batch,*spatial,C) for JRLS.");
+        "(*batch,*spatial,1) for JRLS (one weight shared across channels) "
+        "or (*batch,*spatial,C) for RLS (a genuine per-channel weight).");
 
     m.def(
         "field_diag_rls",
