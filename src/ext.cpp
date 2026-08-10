@@ -731,6 +731,68 @@ NB_MODULE(_core, m) {
         "bound"_a = 3, "ndim"_a = 1, "stream"_a = 0,
         "Materialise the Toeplitz convolution kernel of the flow regulariser.");
 
+    // --- RLS/JRLS (weighted) variants ---
+    // Unlike the field family, the flow weight map is always *joint*: the
+    // flow components are the components of one displacement vector, so a
+    // single weight is shared across all of them and `wgt` must have a
+    // trailing size-1 axis. `bending` is not wired with weighting at the loop
+    // level (as in jitfields) and the library rejects a non-zero value.
+    m.def(
+        "flow_matvec_rls",
+        [](arr out, arr inp, arr wgt,
+           std::optional<std::vector<double>> voxel_size, double absolute,
+           double membrane, double bending, double shears, double div,
+           int8_t bound, int ndim, intptr_t stream) {
+            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
+                     w = to_dltensor(wgt);
+            ff::flow_matvec_rls(o, i, w, vec_ptr(voxel_size), absolute,
+                                membrane, bending, shears, div, bound, ndim,
+                                stream);
+        },
+        "out"_a, "inp"_a, "wgt"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a = 0.0, "membrane"_a = 0.0, "bending"_a = 0.0,
+        "shears"_a = 0.0, "div"_a = 0.0, "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "RLS/JRLS-weighted variant of flow_matvec: `wgt` is "
+        "(*batch,*spatial,1), one weight shared across the flow components. "
+        "`bending` is not supported with weighting.");
+
+    m.def(
+        "flow_diag_rls",
+        [](arr out, arr wgt, std::optional<std::vector<double>> voxel_size,
+           double absolute, double membrane, double bending, double shears,
+           double div, int8_t bound, int ndim, intptr_t stream) {
+            DLTensor o = to_dltensor(out), w = to_dltensor(wgt);
+            ff::flow_diag_rls(o, w, vec_ptr(voxel_size), absolute, membrane,
+                              bending, shears, div, bound, ndim, stream);
+        },
+        "out"_a, "wgt"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a = 0.0, "membrane"_a = 0.0, "bending"_a = 0.0,
+        "shears"_a = 0.0, "div"_a = 0.0, "bound"_a = 3, "ndim"_a = 1,
+        "stream"_a = 0,
+        "Diagonal (preconditioner) of the RLS/JRLS-weighted flow regulariser "
+        "operator, same `wgt` conventions as flow_matvec_rls.");
+
+    m.def(
+        "flow_relax_rls",
+        [](arr sol, arr hes, arr grd, arr wgt,
+           std::optional<std::vector<double>> voxel_size, double absolute,
+           double membrane, double bending, double shears, double div,
+           int8_t bound, int ndim, int nb_iter, intptr_t stream) {
+            DLTensor s = to_dltensor(sol), h = to_dltensor(hes),
+                     g = to_dltensor(grd), w = to_dltensor(wgt);
+            ff::flow_relax_rls(s, h, g, w, vec_ptr(voxel_size), absolute,
+                               membrane, bending, shears, div, bound, ndim,
+                               nb_iter, stream);
+        },
+        "sol"_a, "hes"_a, "grd"_a, "wgt"_a, "voxel_size"_a.none() = nb::none(),
+        "absolute"_a = 0.0, "membrane"_a = 0.0, "bending"_a = 0.0,
+        "shears"_a = 0.0, "div"_a = 0.0, "bound"_a = 3, "ndim"_a = 1,
+        "nb_iter"_a = 1, "stream"_a = 0,
+        "In-place RLS/JRLS-weighted relaxation sweeps solving "
+        "(H + L(w)) x = g for the flow field, same `wgt` conventions as "
+        "flow_matvec_rls.");
+
     // --- in-place accumulate variants (restored jitfields op '+'/'-') ---
     m.def(
         "flow_addmatvec_",

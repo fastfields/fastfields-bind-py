@@ -151,6 +151,9 @@ flow_matvec = _core.flow_matvec
 flow_diag = _core.flow_diag
 flow_relax = _core.flow_relax
 flow_kernel = _core.flow_kernel
+flow_matvec_rls = _core.flow_matvec_rls
+flow_diag_rls = _core.flow_diag_rls
+flow_relax_rls = _core.flow_relax_rls
 
 # In-place-only accumulate primitives (jitfields op '+' / '-'). These
 # read-modify-write the caller's `out`; the trailing underscore marks that, as
@@ -204,6 +207,43 @@ __all__ = [
     "resample",
     "restriction",
     "spline_coeff",
+    # pushpull
+    "pull",
+    "push",
+    "count",
+    "grad",
+    "pull_backward",
+    "push_backward",
+    "count_backward",
+    "grad_backward",
+    # regularisers -- field
+    "field_matvec",
+    "field_diag",
+    "field_relax",
+    "field_kernel",
+    "field_matvec_rls",
+    "field_diag_rls",
+    "field_relax_rls",
+    "field_addmatvec_",
+    "field_submatvec_",
+    "field_adddiag_",
+    "field_subdiag_",
+    "field_addkernel_",
+    "field_subkernel_",
+    # regularisers -- flow
+    "flow_matvec",
+    "flow_diag",
+    "flow_relax",
+    "flow_kernel",
+    "flow_matvec_rls",
+    "flow_diag_rls",
+    "flow_relax_rls",
+    "flow_addmatvec_",
+    "flow_submatvec_",
+    "flow_adddiag_",
+    "flow_subdiag_",
+    "flow_addkernel_",
+    "flow_subkernel_",
     "Spline",
     "Bound",
     # shared argument-normalisation helpers (fastfields.dlpack._helpers)

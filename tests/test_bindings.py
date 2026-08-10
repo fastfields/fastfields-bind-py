@@ -344,6 +344,139 @@ def test_flow_kernel_is_matvec_impulse_response():
 
 
 # ---------------------------------------------------------------------------
+# RLS/JRLS-weighted flow regulariser
+# ---------------------------------------------------------------------------
+#
+# `wgt` is always joint here (trailing size-1 axis): the flow components are
+# the components of one displacement vector, so one weight is shared across
+# them. These mirror the oracles in fastfields-cpu-lib's tests/test_reg_flow.
+# What they buy at *this* layer is proof that the bindings forward the right
+# arguments in the right order to the right C symbol.
+
+_FLOW_RLS_PENALTIES = [
+    dict(absolute=1.75),  # absolute only
+    dict(absolute=0.3, membrane=1.0),  # membrane_jrls path
+    dict(shears=1.3, div=0.7),  # lame_jrls path
+    dict(absolute=0.5, membrane=0.9, shears=1.3, div=0.7),
+]
+
+
+def _flow_rls_setup(seed, H=5, W=6, D=2):
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((H, W, D))
+    y = rng.standard_normal((H, W, D))
+    w = 0.25 + rng.random((H, W, 1))  # strictly positive weight map
+    return x, y, w
+
+
+def test_flow_matvec_rls_is_self_adjoint():
+    # L(w) is symmetric for a fixed weight map: <L x, y> == <x, L y>.
+    for kw in _FLOW_RLS_PENALTIES:
+        x, y, w = _flow_rls_setup(11)
+        lx, ly = np.zeros_like(x), np.zeros_like(y)
+        ff.flow_matvec_rls(lx, x, w, bound=3, ndim=2, **kw)
+        ff.flow_matvec_rls(ly, y, w, bound=3, ndim=2, **kw)
+        np.testing.assert_allclose(
+            float((lx * y).sum()), float((x * ly).sum()), rtol=1e-10
+        )
+        # and it is genuinely weighted: a non-constant w changes the operator
+        flat = np.zeros_like(x)
+        ff.flow_matvec_rls(flat, x, np.ones_like(w), bound=3, ndim=2, **kw)
+        assert not np.allclose(lx, flat)
+
+
+def test_flow_diag_rls_matches_the_operator_diagonal():
+    # diag[i] == e_i^T L(w) e_i, checked on interior voxels only (the
+    # boundary condition makes edge voxels stencil-dependent).
+    for kw in _FLOW_RLS_PENALTIES:
+        x, _, w = _flow_rls_setup(12, H=6, W=7)
+        H, W, D = x.shape
+        diag = np.zeros((H, W, D))
+        ff.flow_diag_rls(diag, w, bound=3, ndim=2, **kw)
+        for i in range(1, H - 1):
+            for j in range(1, W - 1):
+                for c in range(D):
+                    e = np.zeros((H, W, D))
+                    e[i, j, c] = 1.0
+                    o = np.zeros((H, W, D))
+                    ff.flow_matvec_rls(o, e, w, bound=3, ndim=2, **kw)
+                    np.testing.assert_allclose(
+                        o[i, j, c], diag[i, j, c], atol=1e-10
+                    )
+
+
+def test_flow_relax_rls_solves_the_weighted_system():
+    # Relaxation drives (H + L(w)) x -> g, with L(w) the *weighted* operator:
+    # the same oracle as fastfields-cpu-lib's run_2d_relax_rls. Checked as a
+    # residual after a fixed sweep budget rather than a strictly monotone
+    # sequence, which would be brittle once the residual nears eps.
+    rng = np.random.default_rng(13)
+    N, D = 8, 2
+    kw = dict(absolute=0.3, membrane=0.7, shears=1.0, div=0.5)
+    hes = np.stack(
+        [
+            6.0 + rng.random((N, N)),
+            6.0 + rng.random((N, N)),
+            0.5 * (rng.random((N, N)) - 0.5),
+        ],
+        axis=-1,
+    )
+    grd = rng.standard_normal((N, N, D))
+    w = 0.25 + rng.random((N, N, 1))
+
+    def residual(x):
+        r = np.zeros_like(x)
+        ff.sym_matvec(r, hes, x)
+        lx = np.zeros_like(x)
+        ff.flow_matvec_rls(lx, x, w, bound=3, ndim=2, **kw)
+        return np.linalg.norm(r + lx - grd) / np.linalg.norm(grd)
+
+    sol = np.zeros((N, N, D))
+    out = ff.flow_relax_rls(
+        sol, hes, grd, w, bound=3, ndim=2, nb_iter=250, **kw
+    )
+    assert out is None  # in-place, mutates `sol`
+    assert np.any(sol != 0.0)
+    assert residual(sol) < 3e-3
+
+
+def test_flow_rls_rejects_bending():
+    # No jrls bending kernel exists at the impl layer (as in jitfields), so
+    # the library rejects it rather than silently ignoring the penalty.
+    x, _, w = _flow_rls_setup(14)
+    out = np.zeros_like(x)
+    for call in (
+        lambda: ff.flow_matvec_rls(out, x, w, bending=1.0, bound=3, ndim=2),
+        lambda: ff.flow_diag_rls(out, w, bending=1.0, bound=3, ndim=2),
+    ):
+        try:
+            call()
+        except (ValueError, RuntimeError):
+            pass
+        else:
+            raise AssertionError("bending must be rejected with weighting")
+
+
+# ---------------------------------------------------------------------------
+# Public surface
+# ---------------------------------------------------------------------------
+
+
+def test_all_lists_every_re_exported_binding():
+    """``__all__`` must not drift from the names the package actually binds.
+
+    It listed only 28 of 48 bindings before fastfields-lib#69 -- the whole
+    pushpull and regulariser families were missing.
+    """
+    bound = {n for n in dir(ff._core) if not n.startswith("_")}
+    missing = sorted(bound - set(ff.__all__))
+    assert not missing, f"bindings absent from __all__: {missing}"
+    stale = sorted(n for n in ff.__all__ if not hasattr(ff, n))
+    assert not stale, f"__all__ names that do not exist: {stale}"
+    assert len(ff.__all__) == len(set(ff.__all__)), "__all__ has duplicates"
+
+
+# ---------------------------------------------------------------------------
 # `stream` must be a 64-bit handle on every binding
 # ---------------------------------------------------------------------------
 #
@@ -446,6 +579,24 @@ _STREAM_CASES = {
     ),
     "flow_kernel": lambda s: ff.flow_kernel(
         _f(1, 1, _NDIM), stream=s, **_flow_kw()
+    ),
+    "flow_matvec_rls": lambda s: ff.flow_matvec_rls(
+        _f(*_SPATIAL, _NDIM),
+        _f(*_SPATIAL, _NDIM),
+        _f(*_SPATIAL, 1) + 1.0,
+        stream=s,
+        **_flow_kw(),
+    ),
+    "flow_diag_rls": lambda s: ff.flow_diag_rls(
+        _f(*_SPATIAL, _NDIM), _f(*_SPATIAL, 1) + 1.0, stream=s, **_flow_kw()
+    ),
+    "flow_relax_rls": lambda s: ff.flow_relax_rls(
+        _f(*_SPATIAL, _NDIM),
+        _f(*_SPATIAL, _PACKED) + 1.0,
+        _f(*_SPATIAL, _NDIM),
+        _f(*_SPATIAL, 1) + 1.0,
+        stream=s,
+        **_flow_kw(),
     ),
     "flow_addmatvec_": lambda s: ff.flow_addmatvec_(
         _f(*_SPATIAL, _NDIM), _f(*_SPATIAL, _NDIM), stream=s, **_flow_kw()
