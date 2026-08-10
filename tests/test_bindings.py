@@ -343,6 +343,157 @@ def test_flow_kernel_is_matvec_impulse_response():
     check(5, 0.3, 0.5, 0.4, 1.3, 0.7)  # all    -> (5,5,2,2)
 
 
+# ---------------------------------------------------------------------------
+# `stream` must be a 64-bit handle on every binding
+# ---------------------------------------------------------------------------
+#
+# A real CUDA stream handle is a pointer: `torch.cuda.Stream.cuda_stream` and
+# `cupy.cuda.Stream.ptr` are full 64-bit values. nanobind's `int` caster
+# *range-checks* rather than truncating, so a binding declared `int stream`
+# raises TypeError on essentially every genuine GPU stream while looking fine
+# on CPU (where `stream=0` is always passed). `field_relax` was exactly that
+# straggler -- see fastfields-lib#69.
+#
+# The value is never dereferenced on the CPU path, so these calls simply have
+# to survive argument conversion.
+BIG_STREAM = 1 << 40
+
+_SPATIAL = (5, 5)
+_C = 2
+_NDIM = 2
+_PACKED = _C * (_C + 1) // 2  # compact-symmetric Hessian, C=2
+
+
+def _f(*shape):
+    return np.zeros(shape, dtype=np.float64)
+
+
+def _field_kw():
+    return dict(absolute=[1.0] * _C, bound=3, ndim=_NDIM)
+
+
+def _flow_kw():
+    return dict(absolute=1.0, bound=3, ndim=_NDIM)
+
+
+# One minimal, valid call per stream-taking regulariser binding. Keep this in
+# lock-step with the `m.def`s in src/ext.cpp.
+_STREAM_CASES = {
+    "field_matvec": lambda s: ff.field_matvec(
+        _f(*_SPATIAL, _C), _f(*_SPATIAL, _C), stream=s, **_field_kw()
+    ),
+    "field_diag": lambda s: ff.field_diag(
+        _f(*_SPATIAL, _C), stream=s, **_field_kw()
+    ),
+    "field_relax": lambda s: ff.field_relax(
+        _f(*_SPATIAL, _C),
+        _f(*_SPATIAL, _PACKED) + 1.0,
+        _f(*_SPATIAL, _C),
+        stream=s,
+        **_field_kw(),
+    ),
+    "field_kernel": lambda s: ff.field_kernel(
+        _f(1, 1, _C), stream=s, **_field_kw()
+    ),
+    "field_matvec_rls": lambda s: ff.field_matvec_rls(
+        _f(*_SPATIAL, _C),
+        _f(*_SPATIAL, _C),
+        _f(*_SPATIAL, 1) + 1.0,
+        stream=s,
+        **_field_kw(),
+    ),
+    "field_diag_rls": lambda s: ff.field_diag_rls(
+        _f(*_SPATIAL, _C), _f(*_SPATIAL, 1) + 1.0, stream=s, **_field_kw()
+    ),
+    "field_relax_rls": lambda s: ff.field_relax_rls(
+        _f(*_SPATIAL, _C),
+        _f(*_SPATIAL, _PACKED) + 1.0,
+        _f(*_SPATIAL, _C),
+        _f(*_SPATIAL, 1) + 1.0,
+        stream=s,
+        **_field_kw(),
+    ),
+    "field_addmatvec_": lambda s: ff.field_addmatvec_(
+        _f(*_SPATIAL, _C), _f(*_SPATIAL, _C), stream=s, **_field_kw()
+    ),
+    "field_submatvec_": lambda s: ff.field_submatvec_(
+        _f(*_SPATIAL, _C), _f(*_SPATIAL, _C), stream=s, **_field_kw()
+    ),
+    "field_adddiag_": lambda s: ff.field_adddiag_(
+        _f(*_SPATIAL, _C), stream=s, **_field_kw()
+    ),
+    "field_subdiag_": lambda s: ff.field_subdiag_(
+        _f(*_SPATIAL, _C), stream=s, **_field_kw()
+    ),
+    "field_addkernel_": lambda s: ff.field_addkernel_(
+        _f(1, 1, _C), stream=s, **_field_kw()
+    ),
+    "field_subkernel_": lambda s: ff.field_subkernel_(
+        _f(1, 1, _C), stream=s, **_field_kw()
+    ),
+    "flow_matvec": lambda s: ff.flow_matvec(
+        _f(*_SPATIAL, _NDIM), _f(*_SPATIAL, _NDIM), stream=s, **_flow_kw()
+    ),
+    "flow_diag": lambda s: ff.flow_diag(
+        _f(*_SPATIAL, _NDIM), stream=s, **_flow_kw()
+    ),
+    "flow_relax": lambda s: ff.flow_relax(
+        _f(*_SPATIAL, _NDIM),
+        _f(*_SPATIAL, _PACKED) + 1.0,
+        _f(*_SPATIAL, _NDIM),
+        stream=s,
+        **_flow_kw(),
+    ),
+    "flow_kernel": lambda s: ff.flow_kernel(
+        _f(1, 1, _NDIM), stream=s, **_flow_kw()
+    ),
+    "flow_addmatvec_": lambda s: ff.flow_addmatvec_(
+        _f(*_SPATIAL, _NDIM), _f(*_SPATIAL, _NDIM), stream=s, **_flow_kw()
+    ),
+    "flow_submatvec_": lambda s: ff.flow_submatvec_(
+        _f(*_SPATIAL, _NDIM), _f(*_SPATIAL, _NDIM), stream=s, **_flow_kw()
+    ),
+    "flow_adddiag_": lambda s: ff.flow_adddiag_(
+        _f(*_SPATIAL, _NDIM), stream=s, **_flow_kw()
+    ),
+    "flow_subdiag_": lambda s: ff.flow_subdiag_(
+        _f(*_SPATIAL, _NDIM), stream=s, **_flow_kw()
+    ),
+    "flow_addkernel_": lambda s: ff.flow_addkernel_(
+        _f(1, 1, _NDIM), stream=s, **_flow_kw()
+    ),
+    "flow_subkernel_": lambda s: ff.flow_subkernel_(
+        _f(1, 1, _NDIM), stream=s, **_flow_kw()
+    ),
+}
+
+
+def test_every_reg_binding_is_covered_by_a_stream_case():
+    """A new field_*/flow_* binding must be added to _STREAM_CASES."""
+    bound = {
+        n
+        for n in dir(ff._core)
+        if n.startswith(("field_", "flow_")) and not n.startswith("_")
+    }
+    assert bound == set(_STREAM_CASES)
+
+
+def test_reg_bindings_accept_a_64bit_stream_handle():
+    """Regression for fastfields-lib#69: `int stream` rejected real handles."""
+    # Sanity: the same calls work with the CPU default, so a failure below is
+    # about the stream argument and nothing else.
+    for _, call in sorted(_STREAM_CASES.items()):
+        call(0)
+    for name, call in sorted(_STREAM_CASES.items()):
+        try:
+            call(BIG_STREAM)
+        except TypeError as exc:  # pragma: no cover - the bug being guarded
+            raise AssertionError(
+                f"{name} narrows `stream` to a 32-bit int: a real CUDA "
+                f"stream handle ({BIG_STREAM}) is rejected -- {exc}"
+            ) from None
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
