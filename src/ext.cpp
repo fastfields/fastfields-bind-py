@@ -455,7 +455,7 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> absolute,
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
-           int nb_iter, int stream) {
+           int nb_iter, intptr_t stream) {
             DLTensor s = to_dltensor(sol), h = to_dltensor(hes),
                      g = to_dltensor(grd);
             ff::field_relax(s, h, g, vec_ptr(voxel_size), vec_ptr(absolute),
