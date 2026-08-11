@@ -3,6 +3,54 @@
 All functions accept any array object exposing ``__dlpack__`` (numpy, torch,
 cupy, ...). Tensors marked in-place / as outputs are written through their
 DLPack data pointers.
+
+Argument checking
+-----------------
+This is the raw layer and it stays sharp: it does not reshape, cast, allocate
+or copy anything for you. It does reject *structurally* malformed arrays --
+a null data pointer, a 0-d array, a vector (multi-lane) dtype, arrays of a
+single call spread across different devices -- with a ``ValueError`` naming the
+function and the argument, instead of passing them on to the kernels. Shape and
+dtype *contracts* (matching ranks, matching batch shapes, ``ndim`` vs. rank)
+are enforced one layer down, by ``fastfields-lib``, and also surface as
+``ValueError``.
+
+CUDA lifetime invariant
+-----------------------
+**Every array passed to a CUDA op must be kept alive by the caller until the
+stream it was submitted on has been synchronized.**
+
+These bindings are asynchronous on CUDA: a call enqueues work on ``stream`` and
+returns immediately, and nothing in this package holds a reference to your
+arrays -- the DLPack tensors handed to C++ are plain views over memory the
+Python objects own.
+
+If an input, output or temporary is dropped before the stream is synchronized,
+its memory goes back to the framework's allocator (CuPy's memory pool,
+PyTorch's caching allocator) while a kernel may still be reading or writing
+it. The allocator can then hand that same block to an unrelated allocation:
+silent corruption, not a crash. The frameworks differ in *when* such reuse is
+possible -- PyTorch's caching allocator records the stream a block was used on,
+CuPy's pool does not -- so code that happens to work under one is not portable
+to the other.
+
+In practice:
+
+.. code-block:: python
+
+    out = cupy.empty_like(inp)
+    ff.pull(out, inp, grid, stream=stream.ptr)
+    stream.synchronize()        # only now may inp / grid / out be dropped
+    del inp, grid               # (or let them go out of scope)
+
+The friendly wrappers satisfy this for you, which is why it is easy to forget:
+they submit on the framework's *own* current stream (``fastfields.torch`` via
+``_util.stream_ptr``, ``fastfields.cupy`` via ``_util.current_stream_ptr``), so
+the framework's ordering rules cover the memory they allocated, and they keep
+the operands referenced for the whole call -- ``fastfields.torch`` beyond it,
+through autograd's ``save_for_backward``. Calling ``fastfields.dlpack``
+directly, or passing a stream of your own, means taking the invariant on
+yourself. On CPU it holds trivially -- the calls are synchronous.
 """
 
 from __future__ import annotations
@@ -31,13 +79,22 @@ def _preload_native_libs() -> None:
     """Make the shipped shared libraries loadable by the ``_core`` extension.
 
     On ELF/Mach-O we preload cpu first, then the hub library, by absolute path
-    with ``RTLD_GLOBAL``: this registers each under its soname so the loader
-    reuses the copies when ``_core`` is imported, regardless of the RUNPATH
-    baked into libfastfields. On Windows there is no ``RTLD_GLOBAL`` and no
-    rpath, so we add the lib dir to the DLL search path (``_core`` and the
-    hub DLL then resolve their dependencies from there) and also load the DLLs
-    eagerly so a missing dependency surfaces here rather than as an opaque
-    extension-import failure.
+    with ``RTLD_LOCAL | RTLD_NOW``: this registers each under its soname so the
+    loader reuses these copies when ``_core`` is imported, regardless of the
+    RUNPATH baked into libfastfields, and resolving eagerly turns a broken
+    build into an error here rather than a crash on the first call.
+
+    ``RTLD_LOCAL`` (the default; spelled out for the record) is deliberate:
+    ``_core`` links against ``libfastfields`` directly -- it needs no symbol to
+    be visible in the *global* namespace -- so ``RTLD_GLOBAL`` would only serve
+    to export every ``ff::`` symbol process-wide, where it can collide with
+    another library's. Object *reuse* does not depend on the flag: the loader
+    matches an already-loaded object by soname either way.
+
+    On Windows there is no ``RTLD_*`` and no rpath, so we add the lib dir to
+    the DLL search path (``_core`` and the hub DLL then resolve their
+    dependencies from there) and also load the DLLs eagerly so a missing
+    dependency surfaces here rather than as an opaque extension-import failure.
     """
     if sys.platform == "win32":
         if os.path.isdir(_lib_dir):
@@ -47,10 +104,11 @@ def _preload_native_libs() -> None:
             if os.path.exists(path):
                 ctypes.CDLL(path)
         return
+    mode = ctypes.RTLD_LOCAL | os.RTLD_NOW
     for name in _NATIVE_LIBS:
         path = os.path.join(_lib_dir, name)
         if os.path.exists(path):
-            ctypes.CDLL(path, mode=ctypes.RTLD_GLOBAL)
+            ctypes.CDLL(path, mode=mode)
 
 
 _preload_native_libs()
