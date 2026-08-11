@@ -43,3 +43,10 @@ form: distance transforms (`dt_euclidean`, `dt_l1`, the `dt_spline_*` and
 integer order/boundary arguments.
 
 See the [API reference](api/index.md) for full signatures and options.
+
+## On CUDA
+
+The same calls work on CuPy and PyTorch CUDA arrays and take the stream to
+submit on. They are asynchronous, so the caller must keep every array alive
+until that stream is synchronized — see [CUDA usage](cuda.md) for the full
+contract.

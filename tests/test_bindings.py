@@ -645,6 +645,304 @@ def test_reg_bindings_accept_a_64bit_stream_handle():
             ) from None
 
 
+# ---------------------------------------------------------------------------
+# Point-to-spline distance (dt_spline_table / _brent / _gaussnewton)
+# ---------------------------------------------------------------------------
+#
+# These were left untested while the C++ shape contract was unsettled (the
+# bindings could be made to segfault on a malformed call). The contract is now
+# enforced -- `loc` is (*batch, D), `coeff` (*batch, npoints, D), `times`
+# (*batch, ntimes), `time`/`dist` (*batch,) -- so they are tested here.
+#
+# The geometry is chosen so the answer is exact rather than approximate: with a
+# **linear** spline the curve is the polyline through the control points, so a
+# straight run of control points along x is the segment y=0, 0 <= x <= 3.
+
+
+def _straight_spline_case(height=1.0, dtype=np.float64):
+    """A point `height` above a straight linear spline, closest at t = 1.5."""
+    # batch of 1 point in 2D: loc (1, 2) -> nbatch = 1, D = 2.
+    loc = np.array([[1.5, height]], dtype=dtype)
+    # coeff (1, npoints=4, D=2): control points (0,0) (1,0) (2,0) (3,0).
+    coeff = np.zeros((1, 4, 2), dtype=dtype)
+    coeff[0, :, 0] = np.arange(4.0)
+    time = np.zeros((1,), dtype=dtype)
+    dist = np.zeros((1,), dtype=dtype)
+    return loc, coeff, time, dist
+
+
+def test_dt_spline_table_finds_the_closest_tabulated_time():
+    loc, coeff, time, dist = _straight_spline_case()
+    # A dense table that contains the exact optimum t = 1.5.
+    times = np.linspace(0.0, 3.0, 301, dtype=np.float64).reshape(1, 301)
+    ff.dt_spline_table(time, dist, loc, coeff, times, spline=1, bound=3)
+    np.testing.assert_allclose(time[0], 1.5, rtol=0, atol=1e-9)
+    np.testing.assert_allclose(dist[0], 1.0, rtol=1e-9, atol=1e-9)
+
+
+def test_dt_spline_returns_a_squared_distance():
+    # Pins the convention the docstrings now state: dt_spline_* writes the
+    # *squared* distance (a point 2.0 away gets 4.0), unlike dt_mesh.
+    loc, coeff, time, dist = _straight_spline_case(height=2.0)
+    times = np.linspace(0.0, 3.0, 301, dtype=np.float64).reshape(1, 301)
+    ff.dt_spline_table(time, dist, loc, coeff, times, spline=1, bound=3)
+    np.testing.assert_allclose(time[0], 1.5, rtol=0, atol=1e-9)
+    np.testing.assert_allclose(dist[0], 4.0, rtol=1e-9, atol=1e-9)
+
+
+def test_dt_spline_brent_refines_the_table_solution():
+    # Brent starts from the `time`/`dist` already in the buffers (that is the
+    # documented pipeline: a coarse table pass, then a refinement), so seed it
+    # with a coarse table that cannot represent the optimum.
+    loc, coeff, time, dist = _straight_spline_case()
+    coarse = np.arange(4.0, dtype=np.float64).reshape(1, 4)  # 0, 1, 2, 3
+    ff.dt_spline_table(time, dist, loc, coeff, coarse, spline=1, bound=3)
+    assert dist[0] > 1.0 + 1e-6  # the coarse table misses the optimum
+    # `step` is the initial bracket half-width: it has to be wide enough to
+    # bracket the optimum (0.5 reaches t = 1.5 from the seed at t = 1.0).
+    ff.dt_spline_brent(
+        time, dist, loc, coeff, 128, 1e-9, 0.5, spline=1, bound=3
+    )
+    np.testing.assert_allclose(time[0], 1.5, rtol=0, atol=1e-4)
+    np.testing.assert_allclose(dist[0], 1.0, rtol=1e-6, atol=1e-6)
+
+
+def test_dt_spline_gaussnewton_refines_the_table_solution():
+    loc, coeff, time, dist = _straight_spline_case()
+    coarse = np.arange(4.0, dtype=np.float64).reshape(1, 4)
+    ff.dt_spline_table(time, dist, loc, coeff, coarse, spline=1, bound=3)
+    ff.dt_spline_gaussnewton(
+        time, dist, loc, coeff, 128, 1e-9, spline=1, bound=3
+    )
+    np.testing.assert_allclose(time[0], 1.5, rtol=0, atol=1e-4)
+    np.testing.assert_allclose(dist[0], 1.0, rtol=1e-6, atol=1e-6)
+
+
+def test_dt_spline_rejects_a_mismatched_batch_shape():
+    # The shape contract is enforced (it used to be "can segfault"): `time`
+    # and `dist` are (*batch,), i.e. loc.ndim - 1 dimensions.
+    loc, coeff, _, _ = _straight_spline_case()
+    times = np.linspace(0.0, 3.0, 11, dtype=np.float64).reshape(1, 11)
+    bad_time = np.zeros((2,), dtype=np.float64)  # batch is 1, not 2
+    bad_dist = np.zeros((2,), dtype=np.float64)
+    _expect_error(
+        lambda: ff.dt_spline_table(
+            bad_time, bad_dist, loc, coeff, times, spline=1, bound=3
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Point-to-mesh distance (dt_mesh)
+# ---------------------------------------------------------------------------
+#
+# Also previously untested. `nearest_vertex=None` used to hit a device check on
+# the null-data placeholder (fastfields-lib#71); both paths are covered here.
+
+
+def _unit_cube_mesh(dtype=np.float64, index_dtype=np.int64):
+    """A closed cube of side 2 centred on the origin (faces at +-1)."""
+    vertices = np.array(
+        [
+            [-1, -1, -1],
+            [+1, -1, -1],
+            [+1, +1, -1],
+            [-1, +1, -1],
+            [-1, -1, +1],
+            [+1, -1, +1],
+            [+1, +1, +1],
+            [-1, +1, +1],
+        ],
+        dtype=dtype,
+    )
+    faces = np.array(
+        [
+            [0, 2, 1],
+            [0, 3, 2],  # z = -1
+            [4, 5, 6],
+            [4, 6, 7],  # z = +1
+            [0, 1, 5],
+            [0, 5, 4],  # y = -1
+            [3, 6, 2],
+            [3, 7, 6],  # y = +1
+            [0, 4, 7],
+            [0, 7, 3],  # x = -1
+            [1, 2, 6],
+            [1, 6, 5],  # x = +1
+        ],
+        dtype=index_dtype,
+    )
+    return vertices, faces
+
+
+def test_dt_mesh_unsigned_distance_to_a_cube_face():
+    vertices, faces = _unit_cube_mesh()
+    # Points at distance 1 and 2 from the nearest face: the centre (inside),
+    # and points one and two units outside the x = +1 face. The distances are
+    # *not* squared -- 2.0, not 4.0 -- unlike dt_spline_*; the binding
+    # docstring used to claim the opposite.
+    loc = np.array(
+        [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]], dtype=np.float64
+    )
+    dist = np.zeros((3,), dtype=np.float64)
+    ff.dt_mesh(dist, None, loc, vertices, faces, signed_=False, naive=True)
+    np.testing.assert_allclose(
+        np.abs(dist), [1.0, 1.0, 2.0], rtol=1e-9, atol=1e-9
+    )
+
+
+def test_dt_mesh_signed_distance_separates_inside_from_outside():
+    vertices, faces = _unit_cube_mesh()
+    loc = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=np.float64)
+    dist = np.zeros((2,), dtype=np.float64)
+    ff.dt_mesh(dist, None, loc, vertices, faces, signed_=True, naive=True)
+    np.testing.assert_allclose(np.abs(dist), [1.0, 1.0], rtol=1e-9, atol=1e-9)
+    assert dist[0] * dist[1] < 0, (
+        f"the inside and outside points must get opposite signs, got {dist}"
+    )
+
+
+def test_dt_mesh_reports_the_nearest_vertex():
+    vertices, faces = _unit_cube_mesh()
+    # Outside the (+1,+1,+1) corner along the diagonal: the closest point of
+    # the mesh *is* that vertex, so the reported distance is |loc - vertex|.
+    loc = np.array([[2.0, 2.0, 2.0]], dtype=np.float64)
+    dist = np.zeros((1,), dtype=np.float64)
+    nearest = np.zeros((1,), dtype=faces.dtype)
+    ff.dt_mesh(dist, nearest, loc, vertices, faces, signed_=False, naive=True)
+    np.testing.assert_allclose(
+        vertices[nearest[0]], [1.0, 1.0, 1.0], rtol=0, atol=1e-12
+    )
+    expected = np.linalg.norm(loc[0] - vertices[nearest[0]])
+    np.testing.assert_allclose(abs(dist[0]), expected, rtol=1e-9, atol=1e-9)
+
+
+def test_dt_mesh_rejects_a_mismatched_batch_shape():
+    vertices, faces = _unit_cube_mesh()
+    loc = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=np.float64)
+    bad_dist = np.zeros((3,), dtype=np.float64)  # batch is 2, not 3
+    _expect_error(
+        lambda: ff.dt_mesh(
+            bad_dist, None, loc, vertices, faces, signed_=False, naive=True
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Argument sanity checks in the binding layer
+# ---------------------------------------------------------------------------
+#
+# The raw layer hands the caller's memory straight to the kernels, and several
+# library entry points read `t.shape[t.ndim - 1]` before any of their own
+# checks run -- out of bounds for a 0-d array, i.e. a segfault reachable from
+# pure Python. `src/ext.cpp` now rejects structurally malformed tensors up
+# front. These are *sanity* checks: nothing valid-but-unusual is refused, so
+# each case below also asserts the well-formed call still works.
+
+
+def _expect_error(call, *fragments):
+    """Assert `call` raises, optionally with all `fragments` in the message."""
+    try:
+        call()
+    except (ValueError, RuntimeError, TypeError) as exc:
+        msg = str(exc)
+        for fragment in fragments:
+            assert fragment in msg, f"{fragment!r} not in {msg!r}"
+        return msg
+    raise AssertionError("expected the call to raise, it returned")
+
+
+def test_zero_dim_array_is_rejected_not_dereferenced():
+    # `dt_euclidean` loops over shape[ndim - 1]; with ndim == 0 that read is
+    # out of bounds. Every op that takes an array is guarded the same way.
+    scalar = np.array(1.0, dtype=np.float32)  # 0-d, not 1-d
+    _expect_error(
+        lambda: ff.dt_euclidean(scalar), "dt_euclidean", "inp_out", "0-d"
+    )
+    _expect_error(lambda: ff.dt_l1(scalar), "dt_l1", "inp_out")
+    _expect_error(
+        lambda: ff.spline_coeff(scalar, 3, 3), "spline_coeff", "inp_out"
+    )
+    # ... including the ones that read `loc`/`grid`'s trailing dimension.
+    vertices, faces = _unit_cube_mesh()
+    dist = np.zeros((1,), dtype=np.float64)
+    _expect_error(
+        lambda: ff.dt_mesh(
+            dist,
+            None,
+            np.array(0.0),  # `loc` must be (*batch, D)
+            vertices,
+            faces,
+        ),
+        "dt_mesh",
+        "loc",
+    )
+    inp = np.zeros((6, 1))
+    out = np.zeros((6, 1))
+    _expect_error(
+        lambda: ff.pull(out, inp, np.array(0.0), spline=1),
+        "pull",
+        "grid",
+    )
+    # The 1-d version of the same call is untouched.
+    ff.dt_euclidean(np.array([0.0, np.inf], dtype=np.float32))
+
+
+def test_unbatched_point_distances_keep_their_0d_outputs():
+    """The rank guard must not outlaw the *valid* 0-d case.
+
+    ``dt_spline_*``/``dt_mesh`` shape their per-point outputs like the batch:
+    a single point passed as ``loc = (D,)`` has no batch axis at all, so
+    ``time``/``dist``/``nearest_vertex`` are legitimately 0-d. Only arguments
+    that are indexed along their last axis are required to have rank >= 1.
+    """
+    # spline: loc (D,) -> time/dist 0-d
+    loc = np.array([1.5, 1.0], dtype=np.float64)
+    coeff = np.zeros((4, 2), dtype=np.float64)
+    coeff[:, 0] = np.arange(4.0)
+    times = np.linspace(0.0, 3.0, 301, dtype=np.float64)
+    time = np.array(0.0)
+    dist = np.array(0.0)
+    ff.dt_spline_table(time, dist, loc, coeff, times, spline=1, bound=3)
+    np.testing.assert_allclose(float(time), 1.5, rtol=0, atol=1e-9)
+    np.testing.assert_allclose(float(dist), 1.0, rtol=1e-9, atol=1e-9)
+
+    # mesh: loc (D,) -> dist / nearest_vertex 0-d
+    vertices, faces = _unit_cube_mesh()
+    dist0 = np.array(0.0)
+    nearest0 = np.array(0, dtype=faces.dtype)
+    ff.dt_mesh(
+        dist0,
+        nearest0,
+        np.array([2.0, 2.0, 2.0]),
+        vertices,
+        faces,
+        signed_=False,
+        naive=True,
+    )
+    np.testing.assert_allclose(
+        vertices[int(nearest0)], [1.0, 1.0, 1.0], rtol=0, atol=1e-12
+    )
+
+    # Omitting the optional output entirely stays legal too (the null-data
+    # placeholder path -- fastfields-lib#71).
+    ff.dt_mesh(
+        dist0,
+        None,
+        np.array([2.0, 0.0, 0.0]),
+        vertices,
+        faces,
+        signed_=False,
+        naive=True,
+    )
+    np.testing.assert_allclose(abs(float(dist0)), 1.0, rtol=1e-9, atol=1e-9)
+
+
+def test_sanity_checks_name_the_function_and_the_argument():
+    msg = _expect_error(lambda: ff.sym_invert_(np.array(1.0)))
+    assert msg.startswith("fastfields.sym_invert_(): argument 'hessian'"), msg
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

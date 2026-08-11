@@ -17,6 +17,14 @@ x = np.array([0, np.inf, np.inf, 0, np.inf], dtype=np.float32)
 ff.dt_euclidean(x)          # in-place squared Euclidean distance transform
 ```
 
+On CUDA arrays the calls are asynchronous: they enqueue work on the `stream`
+you pass and return. **Every array must be kept alive by the caller until that
+stream is synchronized** — see [`docs/cuda.md`](./docs/cuda.md).
+
+Structurally malformed arrays (0-d, null data, vector dtypes, or a single call
+mixing devices) are rejected with a `ValueError` naming the function and the
+argument; shape/dtype contracts are checked by `fastfields-lib` one layer down.
+
 ## Build
 
 ```bash

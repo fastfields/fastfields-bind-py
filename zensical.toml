@@ -9,6 +9,7 @@ copyright = "Copyright &copy; 2026 The fastfields authors"
 nav = [
   {"fastfields home" = "https://fastfields.github.io/"},
   {"Home" = "index.md"},
+  {"CUDA" = "cuda.md"},
   {"API" = "api/index.md"},
 ]
 [project.theme]
