@@ -2,8 +2,33 @@
 //
 // We accept untyped `nb::ndarray<>` arguments: nanobind auto-imports any
 // object exposing `__dlpack__` (numpy / torch / cupy / ...). Each ndarray is
-// converted to a DLTensor with `to_dltensor` and handed to the C++ library,
-// which operates in place / writes outputs through the DLTensor pointers.
+// converted to a DLTensor by the per-call `Args` checker below and handed to
+// the C++ library, which operates in place / writes outputs through the
+// DLTensor pointers.
+//
+// ---------------------------------------------------------------------------
+// Lifetime contract (matters on CUDA)
+// ---------------------------------------------------------------------------
+// Every binding is *asynchronous* with respect to the caller when it runs on a
+// CUDA device: it enqueues work on `stream` and returns without
+// synchronizing. Nothing here keeps a reference to the caller's arrays -- the
+// DLTensors are stack views over memory the Python objects own, and nanobind
+// drops its references as soon as the call returns.
+//
+// The caller therefore MUST keep every array passed to a CUDA op alive until
+// that stream has been synchronized. Letting an input, output or temporary go
+// out of scope earlier returns its memory to the framework's allocator (cupy's
+// memory pool, torch's caching allocator), which may hand the same block to an
+// unrelated allocation while the kernel is still reading or writing it --
+// silent corruption, not a crash. The two allocators differ in exactly *when*
+// that reuse becomes possible (torch records stream ownership, cupy's pool does
+// not), so "it happened to work with framework X" is not portable.
+//
+// On CPU the same rule holds trivially: the calls are synchronous, so an array
+// that is alive at call time is alive for the whole operation.
+//
+// See `fastfields/dlpack/__init__.py` and `docs/cuda.md` for the user-facing
+// statement of this contract.
 //
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
@@ -13,6 +38,8 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 // All five public headers share the FF_LIB_BOUND_SPLINE_T guard, so they
@@ -63,9 +90,134 @@ static DLTensor null_dltensor() {
     return t;
 }
 
-static DLTensor opt_to_dltensor(std::optional<arr> &a) {
-    return a.has_value() ? to_dltensor(*a) : null_dltensor();
+// ---------------------------------------------------------------------------
+// Argument sanity checks
+// ---------------------------------------------------------------------------
+//
+// This is a raw layer and stays sharp: it hands the caller's memory straight to
+// the kernels and does not second-guess shapes. `fastfields-lib` validates the
+// *semantic* contracts (matching dtypes, matching batch shapes, `ndim` vs.
+// rank, all operands on one device) and raises `std::invalid_argument` when
+// they are violated.
+//
+// What it cannot validate is whether a DLTensor is well-formed enough to be
+// inspected at all. Several entry points read `t.shape[t.ndim - 1]` -- the
+// coordinate dimension of `loc`/`grid`, the axis `dt_euclidean` / `dt_l1` /
+// `spline_coeff` sweep, the channel count of the posdef operands -- *before*
+// any of their own checks run. For a 0-d array that index is `shape[-1]`, and
+// nanobind leaves the shape/stride pointers null when there is no dimension to
+// describe, so the read is off the end of a null pointer. Likewise every entry
+// dereferences `t.data`. These are the preconditions of the library's own
+// checks, so they belong here, on the way in.
+//
+// Deliberately *not* policy: any rank the library can index is accepted, any
+// dtype it dispatches on, any strides (including non-contiguous and negative),
+// any device. Only structurally malformed tensors are rejected -- and the
+// rank check is per-argument, so the unbatched form of dt_spline_*/dt_mesh,
+// where the per-point outputs are genuinely 0-d, keeps working (see
+// `Args::batch_shaped`). The cost is a handful of integer comparisons per
+// call, against millisecond-scale kernels.
+
+// Upper bound on the rank we accept. NumPy's own maximum is 64 and no
+// fastfields op comes close, so this only catches a garbage `ndim` (negative,
+// or absurdly large) that would otherwise index shape/stride arrays out of
+// bounds.
+static constexpr int32_t FF_MAX_NDIM = 64;
+
+[[noreturn]] static void arg_error(const char *op, const char *name,
+                                   const std::string &what) {
+    throw std::invalid_argument(std::string("fastfields.") + op +
+                                "(): argument '" + name + "' " + what);
 }
+
+static std::string device_str(const DLDevice &d) {
+    return "(device_type=" + std::to_string((int)d.device_type) +
+           ", device_id=" + std::to_string((int)d.device_id) + ")";
+}
+
+// Per-call argument checker: converts each ndarray to a DLTensor, checks it is
+// well-formed, and requires every tensor in the call to sit on one device.
+// One instance per binding, named for the op so errors say which call failed.
+class Args {
+  public:
+    // Tag for an argument whose rank *is* the batch rank: the per-point
+    // outputs of dt_spline_* / dt_mesh (`time`, `dist`, `nearest_vertex`). A
+    // single unbatched point has no batch dimension, so those are legitimately
+    // 0-d -- and nothing reads their trailing dimension, so the rank check is
+    // relaxed for them and for them only.
+    static constexpr bool batch_shaped = true;
+
+    explicit Args(const char *op) : op_(op) {}
+
+    // A required tensor argument.
+    DLTensor operator()(arr &a, const char *name, bool allow_scalar = false) {
+        DLTensor t = to_dltensor(a);
+        check(t, name, allow_scalar);
+        return t;
+    }
+
+    // An optional tensor argument. Absent -> a null-data placeholder, which
+    // the library reads as "not provided"; present -> checked as usual (in
+    // particular a null data pointer is rejected rather than silently
+    // demoting the argument to "absent").
+    DLTensor opt(std::optional<arr> &a, const char *name,
+                 bool allow_scalar = false) {
+        if (!a.has_value())
+            return null_dltensor();
+        return (*this)(*a, name, allow_scalar);
+    }
+
+  private:
+    void check(const DLTensor &t, const char *name, bool allow_scalar) {
+        if (t.data == nullptr)
+            arg_error(op_, name, "has a null data pointer");
+        if (t.ndim < 0)
+            arg_error(op_, name, "has a negative rank");
+        if (t.ndim < 1 && !allow_scalar)
+            arg_error(op_, name,
+                      "is a 0-d array; it is indexed along its last axis, so "
+                      "it must have rank >= 1");
+        if (t.ndim > FF_MAX_NDIM)
+            arg_error(op_, name,
+                      "has rank " + std::to_string(t.ndim) + ", above the " +
+                          std::to_string(FF_MAX_NDIM) + " supported");
+        // A 0-d array has no shape/stride arrays to point at, so only demand
+        // them once there is a dimension to describe.
+        if (t.ndim > 0 && (t.shape == nullptr || t.strides == nullptr))
+            arg_error(op_, name, "has no shape/stride information");
+        if (t.dtype.lanes != 1)
+            arg_error(op_, name,
+                      "has a vector dtype (lanes=" +
+                          std::to_string((int)t.dtype.lanes) +
+                          "); only scalar dtypes are supported");
+        if (t.dtype.bits != 8 && t.dtype.bits != 16 && t.dtype.bits != 32 &&
+            t.dtype.bits != 64)
+            arg_error(op_, name,
+                      "has an unsupported dtype width (" +
+                          std::to_string((int)t.dtype.bits) +
+                          " bits); expected 8, 16, 32 or 64");
+        // Device consistency: the library dispatches the whole op on one
+        // operand's device, so a mismatch means the wrong backend reads the
+        // other operand's pointer -- a device pointer read as host memory, or
+        // vice versa. Catch it here, naming both arguments.
+        if (!seen_) {
+            seen_ = true;
+            dev_ = t.device;
+            ref_ = name;
+        } else if (t.device.device_type != dev_.device_type ||
+                   t.device.device_id != dev_.device_id) {
+            arg_error(op_, name,
+                      "is on " + device_str(t.device) + " but '" +
+                          std::string(ref_) + "' is on " + device_str(dev_) +
+                          "; all arrays in a call must be on the same device");
+        }
+    }
+
+    const char *op_;
+    const char *ref_ = nullptr;
+    bool seen_ = false;
+    DLDevice dev_{};
+};
 
 // A `const double *` view of an optional Python sequence, or nullptr when the
 // sequence is absent/empty (the library reads a null pointer as "use the
@@ -88,7 +240,8 @@ NB_MODULE(_core, m) {
     m.def(
         "dt_euclidean",
         [](arr inp_out, double voxel_spacing, intptr_t stream) {
-            DLTensor t = to_dltensor(inp_out);
+            Args A("dt_euclidean");
+            DLTensor t = A(inp_out, "inp_out");
             ff::dt_euclidean(t, voxel_spacing, stream);
         },
         "inp_out"_a, "voxel_spacing"_a = 1.0, "stream"_a = 0,
@@ -98,7 +251,8 @@ NB_MODULE(_core, m) {
     m.def(
         "dt_l1",
         [](arr inp_out, double voxel_spacing, intptr_t stream) {
-            DLTensor t = to_dltensor(inp_out);
+            Args A("dt_l1");
+            DLTensor t = A(inp_out, "inp_out");
             ff::dt_l1(t, voxel_spacing, stream);
         },
         "inp_out"_a, "voxel_spacing"_a = 1.0, "stream"_a = 0,
@@ -108,61 +262,81 @@ NB_MODULE(_core, m) {
         "dt_spline_table",
         [](arr time, arr dist, arr loc, arr coeff, arr times, int8_t spline,
            int8_t bound, intptr_t stream) {
-            DLTensor t = to_dltensor(time), d = to_dltensor(dist),
-                     l = to_dltensor(loc), c = to_dltensor(coeff),
-                     ts = to_dltensor(times);
+            Args A("dt_spline_table");
+            DLTensor t = A(time, "time", Args::batch_shaped),
+                     d = A(dist, "dist", Args::batch_shaped),
+                     l = A(loc, "loc"), c = A(coeff, "coeff"),
+                     ts = A(times, "times");
             ff::dt_spline_table(t, d, l, c, ts, spline, bound, stream);
         },
         "time"_a, "dist"_a, "loc"_a, "coeff"_a, "times"_a, "spline"_a = 3,
         "bound"_a = 3, "stream"_a = 0,
-        "Point-to-spline distance via a dictionary of candidate times.");
+        "Point-to-spline squared distance via a dictionary of candidate "
+        "times. loc (*batch,D), coeff (*batch,npoints,D), times "
+        "(*batch,ntimes); time and dist are (*batch,) -- 0-d for a single "
+        "point. Writes the best time and its squared distance.");
 
     m.def(
         "dt_spline_brent",
         [](arr time, arr dist, arr loc, arr coeff, int64_t max_iter, double tol,
            double step, int8_t spline, int8_t bound, intptr_t stream) {
-            DLTensor t = to_dltensor(time), d = to_dltensor(dist),
-                     l = to_dltensor(loc), c = to_dltensor(coeff);
+            Args A("dt_spline_brent");
+            DLTensor t = A(time, "time", Args::batch_shaped),
+                     d = A(dist, "dist", Args::batch_shaped),
+                     l = A(loc, "loc"), c = A(coeff, "coeff");
             ff::dt_spline_brent(t, d, l, c, max_iter, tol, step, spline, bound,
                               stream);
         },
         "time"_a, "dist"_a, "loc"_a, "coeff"_a, "max_iter"_a, "tol"_a, "step"_a,
         "spline"_a = 3, "bound"_a = 3, "stream"_a = 0,
-        "Point-to-spline distance via Brent's method.");
+        "Point-to-spline squared distance via Brent's method. Refines the "
+        "`time`/`dist` already in the buffers (seed them with a coarse "
+        "dt_spline_table pass); `step` is the initial bracket half-width "
+        "and must be wide enough to bracket the optimum.");
 
     m.def(
         "dt_spline_gaussnewton",
         [](arr time, arr dist, arr loc, arr coeff, int64_t max_iter, double tol,
            int8_t spline, int8_t bound, intptr_t stream) {
-            DLTensor t = to_dltensor(time), d = to_dltensor(dist),
-                     l = to_dltensor(loc), c = to_dltensor(coeff);
+            Args A("dt_spline_gaussnewton");
+            DLTensor t = A(time, "time", Args::batch_shaped),
+                     d = A(dist, "dist", Args::batch_shaped),
+                     l = A(loc, "loc"), c = A(coeff, "coeff");
             ff::dt_spline_gaussnewton(t, d, l, c, max_iter, tol, spline, bound,
                                     stream);
         },
         "time"_a, "dist"_a, "loc"_a, "coeff"_a, "max_iter"_a, "tol"_a,
         "spline"_a = 3, "bound"_a = 3, "stream"_a = 0,
-        "Point-to-spline distance via Gauss-Newton optimization.");
+        "Point-to-spline squared distance via Gauss-Newton optimization. "
+        "Refines the `time`/`dist` already in the buffers (seed them with "
+        "a coarse dt_spline_table pass).");
 
     m.def(
         "dt_mesh",
         [](arr dist, std::optional<arr> nearest_vertex, arr loc, arr vertices,
            arr faces, bool signed_, bool naive, intptr_t stream) {
-            DLTensor d = to_dltensor(dist);
-            DLTensor nv = opt_to_dltensor(nearest_vertex);
-            DLTensor l = to_dltensor(loc), v = to_dltensor(vertices),
-                     f = to_dltensor(faces);
+            Args A("dt_mesh");
+            DLTensor d = A(dist, "dist", Args::batch_shaped);
+            DLTensor nv = A.opt(nearest_vertex, "nearest_vertex",
+                                Args::batch_shaped);
+            DLTensor l = A(loc, "loc"), v = A(vertices, "vertices"),
+                     f = A(faces, "faces");
             ff::dt_mesh(d, nv, l, v, f, signed_, naive, stream);
         },
         "dist"_a, "nearest_vertex"_a.none() = nb::none(), "loc"_a, "vertices"_a,
         "faces"_a, "signed_"_a = true, "naive"_a = false, "stream"_a = 0,
-        "Point-to-triangular-mesh (squared) distance; nearest_vertex optional.");
+        "Point-to-triangular-mesh distance. `dist` is the Euclidean distance "
+        "(NOT squared, unlike dt_spline_*), negative inside the surface when "
+        "signed_. loc (*batch,D), vertices (N,D), faces (M,D); dist and the "
+        "optional nearest_vertex are (*batch,) -- 0-d for a single point.");
 
     // ----- posdef.h -----
     m.def(
         "sym_matvec",
         [](arr out, arr hessian, arr inp, intptr_t stream) {
-            DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
-                     i = to_dltensor(inp);
+            Args A("sym_matvec");
+            DLTensor o = A(out, "out"), h = A(hessian, "hessian"),
+                     i = A(inp, "inp");
             ff::sym_matvec(o, h, i, stream);
         },
         "out"_a, "hessian"_a, "inp"_a, "stream"_a = 0,
@@ -171,8 +345,9 @@ NB_MODULE(_core, m) {
     m.def(
         "sym_matvec_backward",
         [](arr out, arr grd, arr inp, intptr_t stream) {
-            DLTensor o = to_dltensor(out), g = to_dltensor(grd),
-                     i = to_dltensor(inp);
+            Args A("sym_matvec_backward");
+            DLTensor o = A(out, "out"), g = A(grd, "grd"),
+                     i = A(inp, "inp");
             ff::sym_matvec_backward(o, g, i, stream);
         },
         "out"_a, "grd"_a, "inp"_a, "stream"_a = 0,
@@ -181,8 +356,9 @@ NB_MODULE(_core, m) {
     m.def(
         "sym_addmatvec_",
         [](arr out, arr hessian, arr inp, intptr_t stream) {
-            DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
-                     i = to_dltensor(inp);
+            Args A("sym_addmatvec_");
+            DLTensor o = A(out, "out"), h = A(hessian, "hessian"),
+                     i = A(inp, "inp");
             ff::sym_addmatvec_(o, h, i, stream);
         },
         "out"_a, "hessian"_a, "inp"_a, "stream"_a = 0, "out += H @ inp.");
@@ -190,8 +366,9 @@ NB_MODULE(_core, m) {
     m.def(
         "sym_submatvec_",
         [](arr out, arr hessian, arr inp, intptr_t stream) {
-            DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
-                     i = to_dltensor(inp);
+            Args A("sym_submatvec_");
+            DLTensor o = A(out, "out"), h = A(hessian, "hessian"),
+                     i = A(inp, "inp");
             ff::sym_submatvec_(o, h, i, stream);
         },
         "out"_a, "hessian"_a, "inp"_a, "stream"_a = 0, "out -= H @ inp.");
@@ -200,9 +377,10 @@ NB_MODULE(_core, m) {
         "sym_solve",
         [](arr out, arr hessian, arr inp, std::optional<arr> weight,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out), h = to_dltensor(hessian),
-                     i = to_dltensor(inp);
-            DLTensor w = opt_to_dltensor(weight);
+            Args A("sym_solve");
+            DLTensor o = A(out, "out"), h = A(hessian, "hessian"),
+                     i = A(inp, "inp");
+            DLTensor w = A.opt(weight, "weight");
             ff::sym_solve(o, h, i, w, stream);
         },
         "out"_a, "hessian"_a, "inp"_a, "weight"_a.none() = nb::none(),
@@ -211,8 +389,9 @@ NB_MODULE(_core, m) {
     m.def(
         "sym_solve_",
         [](arr inp_out, arr hessian, std::optional<arr> weight, intptr_t stream) {
-            DLTensor io = to_dltensor(inp_out), h = to_dltensor(hessian);
-            DLTensor w = opt_to_dltensor(weight);
+            Args A("sym_solve_");
+            DLTensor io = A(inp_out, "inp_out"), h = A(hessian, "hessian");
+            DLTensor w = A.opt(weight, "weight");
             ff::sym_solve_(io, h, w, stream);
         },
         "inp_out"_a, "hessian"_a, "weight"_a.none() = nb::none(),
@@ -222,7 +401,8 @@ NB_MODULE(_core, m) {
     m.def(
         "sym_invert",
         [](arr out, arr hessian, intptr_t stream) {
-            DLTensor o = to_dltensor(out), h = to_dltensor(hessian);
+            Args A("sym_invert");
+            DLTensor o = A(out, "out"), h = A(hessian, "hessian");
             ff::sym_invert(o, h, stream);
         },
         "out"_a, "hessian"_a, "stream"_a = 0,
@@ -231,7 +411,8 @@ NB_MODULE(_core, m) {
     m.def(
         "sym_invert_",
         [](arr hessian, intptr_t stream) {
-            DLTensor h = to_dltensor(hessian);
+            Args A("sym_invert_");
+            DLTensor h = A(hessian, "hessian");
             ff::sym_invert_(h, stream);
         },
         "hessian"_a, "stream"_a = 0,
@@ -241,7 +422,8 @@ NB_MODULE(_core, m) {
     auto resize_like = [](arr &out, arr &inp, int8_t spline, int8_t bound,
                           double shift, std::optional<std::vector<double>> &scale,
                           int ndim, intptr_t stream, bool restriction) {
-        DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+        Args A(restriction ? "restriction" : "resample");
+        DLTensor o = A(out, "out"), i = A(inp, "inp");
         const double *scale_ptr = nullptr;
         if (scale.has_value() && !scale->empty())
             scale_ptr = scale->data();
@@ -281,7 +463,8 @@ NB_MODULE(_core, m) {
     m.def(
         "spline_coeff",
         [](arr inp_out, int8_t spline, int8_t bound, intptr_t stream) {
-            DLTensor t = to_dltensor(inp_out);
+            Args A("spline_coeff");
+            DLTensor t = A(inp_out, "inp_out");
             ff::spline_coeff(t, spline, bound, stream);
         },
         "inp_out"_a, "spline"_a = 3, "bound"_a = 3, "stream"_a = 0,
@@ -295,8 +478,9 @@ NB_MODULE(_core, m) {
         "pull",
         [](arr out, arr inp, arr grid, int8_t spline, int8_t bound,
            int8_t extrapolate, intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
-                     g = to_dltensor(grid);
+            Args A("pull");
+            DLTensor o = A(out, "out"), i = A(inp, "inp"),
+                     g = A(grid, "grid");
             ff::pull(o, i, g, spline, bound, extrapolate, stream);
         },
         "out"_a, "inp"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3,
@@ -309,8 +493,9 @@ NB_MODULE(_core, m) {
         "push",
         [](arr out, arr inp, arr grid, int8_t spline, int8_t bound,
            int8_t extrapolate, intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
-                     g = to_dltensor(grid);
+            Args A("push");
+            DLTensor o = A(out, "out"), i = A(inp, "inp"),
+                     g = A(grid, "grid");
             ff::push(o, i, g, spline, bound, extrapolate, stream);
         },
         "out"_a, "inp"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3,
@@ -322,7 +507,8 @@ NB_MODULE(_core, m) {
         "count",
         [](arr out, arr grid, int8_t spline, int8_t bound, int8_t extrapolate,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out), g = to_dltensor(grid);
+            Args A("count");
+            DLTensor o = A(out, "out"), g = A(grid, "grid");
             ff::count(o, g, spline, bound, extrapolate, stream);
         },
         "out"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3, "extrapolate"_a = 1,
@@ -334,8 +520,9 @@ NB_MODULE(_core, m) {
         "grad",
         [](arr out, arr inp, arr grid, int8_t spline, int8_t bound,
            int8_t extrapolate, bool abs, intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
-                     g = to_dltensor(grid);
+            Args A("grad");
+            DLTensor o = A(out, "out"), i = A(inp, "inp"),
+                     g = A(grid, "grid");
             ff::grad(o, i, g, spline, bound, extrapolate, abs, stream);
         },
         "out"_a, "inp"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3,
@@ -352,9 +539,10 @@ NB_MODULE(_core, m) {
         "pull_backward",
         [](arr out, arr gout, arr inp, arr ginp, arr grid, int8_t spline,
            int8_t bound, int8_t extrapolate, intptr_t stream) {
-            DLTensor o = to_dltensor(out), go = to_dltensor(gout),
-                     i = to_dltensor(inp), gi = to_dltensor(ginp),
-                     g = to_dltensor(grid);
+            Args A("pull_backward");
+            DLTensor o = A(out, "out"), go = A(gout, "gout"),
+                     i = A(inp, "inp"), gi = A(ginp, "ginp"),
+                     g = A(grid, "grid");
             ff::pull_backward(o, go, i, gi, g, spline, bound, extrapolate,
                               stream);
         },
@@ -368,9 +556,10 @@ NB_MODULE(_core, m) {
         "push_backward",
         [](arr out, arr gout, arr inp, arr ginp, arr grid, int8_t spline,
            int8_t bound, int8_t extrapolate, intptr_t stream) {
-            DLTensor o = to_dltensor(out), go = to_dltensor(gout),
-                     i = to_dltensor(inp), gi = to_dltensor(ginp),
-                     g = to_dltensor(grid);
+            Args A("push_backward");
+            DLTensor o = A(out, "out"), go = A(gout, "gout"),
+                     i = A(inp, "inp"), gi = A(ginp, "ginp"),
+                     g = A(grid, "grid");
             ff::push_backward(o, go, i, gi, g, spline, bound, extrapolate,
                               stream);
         },
@@ -383,8 +572,9 @@ NB_MODULE(_core, m) {
         "count_backward",
         [](arr gout, arr ginp, arr grid, int8_t spline, int8_t bound,
            int8_t extrapolate, intptr_t stream) {
-            DLTensor go = to_dltensor(gout), gi = to_dltensor(ginp),
-                     g = to_dltensor(grid);
+            Args A("count_backward");
+            DLTensor go = A(gout, "gout"), gi = A(ginp, "ginp"),
+                     g = A(grid, "grid");
             ff::count_backward(go, gi, g, spline, bound, extrapolate, stream);
         },
         "gout"_a, "ginp"_a, "grid"_a, "spline"_a = 2, "bound"_a = 3,
@@ -396,9 +586,10 @@ NB_MODULE(_core, m) {
         "grad_backward",
         [](arr out, arr gout, arr inp, arr ginp, arr grid, int8_t spline,
            int8_t bound, int8_t extrapolate, bool abs, intptr_t stream) {
-            DLTensor o = to_dltensor(out), go = to_dltensor(gout),
-                     i = to_dltensor(inp), gi = to_dltensor(ginp),
-                     g = to_dltensor(grid);
+            Args A("grad_backward");
+            DLTensor o = A(out, "out"), go = A(gout, "gout"),
+                     i = A(inp, "inp"), gi = A(ginp, "ginp"),
+                     g = A(grid, "grid");
             ff::grad_backward(o, go, i, gi, g, spline, bound, extrapolate,
                               abs, stream);
         },
@@ -418,7 +609,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            Args A("field_matvec");
+            DLTensor o = A(out, "out"), i = A(inp, "inp");
             ff::field_matvec(o, i, vec_ptr(voxel_size), vec_ptr(absolute),
                              vec_ptr(membrane), vec_ptr(bending), bound, ndim,
                              stream);
@@ -437,7 +629,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("field_diag");
+            DLTensor o = A(out, "out");
             ff::field_diag(o, vec_ptr(voxel_size), vec_ptr(absolute),
                            vec_ptr(membrane), vec_ptr(bending), bound, ndim,
                            stream);
@@ -456,8 +649,9 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            int nb_iter, intptr_t stream) {
-            DLTensor s = to_dltensor(sol), h = to_dltensor(hes),
-                     g = to_dltensor(grd);
+            Args A("field_relax");
+            DLTensor s = A(sol, "sol"), h = A(hes, "hes"),
+                     g = A(grd, "grd");
             ff::field_relax(s, h, g, vec_ptr(voxel_size), vec_ptr(absolute),
                             vec_ptr(membrane), vec_ptr(bending), bound, ndim,
                             nb_iter, stream);
@@ -476,7 +670,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("field_kernel");
+            DLTensor o = A(out, "out");
             ff::field_kernel(o, vec_ptr(voxel_size), vec_ptr(absolute),
                              vec_ptr(membrane), vec_ptr(bending), bound, ndim,
                              stream);
@@ -501,8 +696,9 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
-                     w = to_dltensor(wgt);
+            Args A("field_matvec_rls");
+            DLTensor o = A(out, "out"), i = A(inp, "inp"),
+                     w = A(wgt, "wgt");
             ff::field_matvec_rls(o, i, w, vec_ptr(voxel_size),
                                  vec_ptr(absolute), vec_ptr(membrane),
                                  vec_ptr(bending), bound, ndim, stream);
@@ -522,7 +718,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out), w = to_dltensor(wgt);
+            Args A("field_diag_rls");
+            DLTensor o = A(out, "out"), w = A(wgt, "wgt");
             ff::field_diag_rls(o, w, vec_ptr(voxel_size), vec_ptr(absolute),
                                vec_ptr(membrane), vec_ptr(bending), bound,
                                ndim, stream);
@@ -542,8 +739,9 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            int nb_iter, intptr_t stream) {
-            DLTensor s = to_dltensor(sol), h = to_dltensor(hes),
-                     g = to_dltensor(grd), w = to_dltensor(wgt);
+            Args A("field_relax_rls");
+            DLTensor s = A(sol, "sol"), h = A(hes, "hes"),
+                     g = A(grd, "grd"), w = A(wgt, "wgt");
             ff::field_relax_rls(s, h, g, w, vec_ptr(voxel_size),
                                 vec_ptr(absolute), vec_ptr(membrane),
                                 vec_ptr(bending), bound, ndim, nb_iter,
@@ -565,7 +763,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            Args A("field_addmatvec_");
+            DLTensor o = A(out, "out"), i = A(inp, "inp");
             ff::field_addmatvec_(o, i, vec_ptr(voxel_size), vec_ptr(absolute),
                                  vec_ptr(membrane), vec_ptr(bending), bound,
                                  ndim, stream);
@@ -585,7 +784,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            Args A("field_submatvec_");
+            DLTensor o = A(out, "out"), i = A(inp, "inp");
             ff::field_submatvec_(o, i, vec_ptr(voxel_size), vec_ptr(absolute),
                                  vec_ptr(membrane), vec_ptr(bending), bound,
                                  ndim, stream);
@@ -605,7 +805,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("field_adddiag_");
+            DLTensor o = A(out, "out");
             ff::field_adddiag_(o, vec_ptr(voxel_size), vec_ptr(absolute),
                                vec_ptr(membrane), vec_ptr(bending), bound, ndim,
                                stream);
@@ -623,7 +824,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("field_subdiag_");
+            DLTensor o = A(out, "out");
             ff::field_subdiag_(o, vec_ptr(voxel_size), vec_ptr(absolute),
                                vec_ptr(membrane), vec_ptr(bending), bound, ndim,
                                stream);
@@ -641,7 +843,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("field_addkernel_");
+            DLTensor o = A(out, "out");
             ff::field_addkernel_(o, vec_ptr(voxel_size), vec_ptr(absolute),
                                vec_ptr(membrane), vec_ptr(bending), bound, ndim,
                                stream);
@@ -659,7 +862,8 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> membrane,
            std::optional<std::vector<double>> bending, int8_t bound, int ndim,
            intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("field_subkernel_");
+            DLTensor o = A(out, "out");
             ff::field_subkernel_(o, vec_ptr(voxel_size), vec_ptr(absolute),
                                vec_ptr(membrane), vec_ptr(bending), bound, ndim,
                                stream);
@@ -676,7 +880,8 @@ NB_MODULE(_core, m) {
         [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            Args A("flow_matvec");
+            DLTensor o = A(out, "out"), i = A(inp, "inp");
             ff::flow_matvec(o, i, vec_ptr(voxel_size), absolute, membrane,
                             bending, shears, div, bound, ndim, stream);
         },
@@ -691,7 +896,8 @@ NB_MODULE(_core, m) {
         [](arr out, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("flow_diag");
+            DLTensor o = A(out, "out");
             ff::flow_diag(o, vec_ptr(voxel_size), absolute, membrane, bending,
                           shears, div, bound, ndim, stream);
         },
@@ -706,8 +912,9 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> voxel_size, double absolute,
            double membrane, double bending, double shears, double div,
            int8_t bound, int ndim, int nb_iter, intptr_t stream) {
-            DLTensor s = to_dltensor(sol), h = to_dltensor(hes),
-                     g = to_dltensor(grd);
+            Args A("flow_relax");
+            DLTensor s = A(sol, "sol"), h = A(hes, "hes"),
+                     g = A(grd, "grd");
             ff::flow_relax(s, h, g, vec_ptr(voxel_size), absolute, membrane,
                            bending, shears, div, bound, ndim, nb_iter, stream);
         },
@@ -722,7 +929,8 @@ NB_MODULE(_core, m) {
         [](arr out, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("flow_kernel");
+            DLTensor o = A(out, "out");
             ff::flow_kernel(o, vec_ptr(voxel_size), absolute, membrane,
                             bending, shears, div, bound, ndim, stream);
         },
@@ -743,8 +951,9 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> voxel_size, double absolute,
            double membrane, double bending, double shears, double div,
            int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp),
-                     w = to_dltensor(wgt);
+            Args A("flow_matvec_rls");
+            DLTensor o = A(out, "out"), i = A(inp, "inp"),
+                     w = A(wgt, "wgt");
             ff::flow_matvec_rls(o, i, w, vec_ptr(voxel_size), absolute,
                                 membrane, bending, shears, div, bound, ndim,
                                 stream);
@@ -762,7 +971,8 @@ NB_MODULE(_core, m) {
         [](arr out, arr wgt, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out), w = to_dltensor(wgt);
+            Args A("flow_diag_rls");
+            DLTensor o = A(out, "out"), w = A(wgt, "wgt");
             ff::flow_diag_rls(o, w, vec_ptr(voxel_size), absolute, membrane,
                               bending, shears, div, bound, ndim, stream);
         },
@@ -779,8 +989,9 @@ NB_MODULE(_core, m) {
            std::optional<std::vector<double>> voxel_size, double absolute,
            double membrane, double bending, double shears, double div,
            int8_t bound, int ndim, int nb_iter, intptr_t stream) {
-            DLTensor s = to_dltensor(sol), h = to_dltensor(hes),
-                     g = to_dltensor(grd), w = to_dltensor(wgt);
+            Args A("flow_relax_rls");
+            DLTensor s = A(sol, "sol"), h = A(hes, "hes"),
+                     g = A(grd, "grd"), w = A(wgt, "wgt");
             ff::flow_relax_rls(s, h, g, w, vec_ptr(voxel_size), absolute,
                                membrane, bending, shears, div, bound, ndim,
                                nb_iter, stream);
@@ -799,7 +1010,8 @@ NB_MODULE(_core, m) {
         [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            Args A("flow_addmatvec_");
+            DLTensor o = A(out, "out"), i = A(inp, "inp");
             ff::flow_addmatvec_(o, i, vec_ptr(voxel_size), absolute, membrane,
                                 bending, shears, div, bound, ndim, stream);
         },
@@ -814,7 +1026,8 @@ NB_MODULE(_core, m) {
         [](arr out, arr inp, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out), i = to_dltensor(inp);
+            Args A("flow_submatvec_");
+            DLTensor o = A(out, "out"), i = A(inp, "inp");
             ff::flow_submatvec_(o, i, vec_ptr(voxel_size), absolute, membrane,
                                 bending, shears, div, bound, ndim, stream);
         },
@@ -829,7 +1042,8 @@ NB_MODULE(_core, m) {
         [](arr out, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("flow_adddiag_");
+            DLTensor o = A(out, "out");
             ff::flow_adddiag_(o, vec_ptr(voxel_size), absolute, membrane,
                               bending, shears, div, bound, ndim, stream);
         },
@@ -843,7 +1057,8 @@ NB_MODULE(_core, m) {
         [](arr out, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("flow_subdiag_");
+            DLTensor o = A(out, "out");
             ff::flow_subdiag_(o, vec_ptr(voxel_size), absolute, membrane,
                               bending, shears, div, bound, ndim, stream);
         },
@@ -857,7 +1072,8 @@ NB_MODULE(_core, m) {
         [](arr out, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("flow_addkernel_");
+            DLTensor o = A(out, "out");
             ff::flow_addkernel_(o, vec_ptr(voxel_size), absolute, membrane,
                               bending, shears, div, bound, ndim, stream);
         },
@@ -871,7 +1087,8 @@ NB_MODULE(_core, m) {
         [](arr out, std::optional<std::vector<double>> voxel_size,
            double absolute, double membrane, double bending, double shears,
            double div, int8_t bound, int ndim, intptr_t stream) {
-            DLTensor o = to_dltensor(out);
+            Args A("flow_subkernel_");
+            DLTensor o = A(out, "out");
             ff::flow_subkernel_(o, vec_ptr(voxel_size), absolute, membrane,
                               bending, shears, div, bound, ndim, stream);
         },
