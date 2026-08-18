@@ -40,6 +40,10 @@ libraries via `make` if they are missing, ships them inside the wheel under
 `fastfields/dlpack/lib/`, and compiles the nanobind extension
 (`fastfields.dlpack._core`) against them with an `$ORIGIN/lib` rpath.
 
-Enum helpers `ff.Spline` (0=Nearest .. 7) and `ff.Bound`
-(0=Zero,1=Replicate,2=DCT1,3=DCT2,4=DST1,5=DST2,6=DFT,7=NoCheck) document the
-integer `spline`/`bound` arguments.
+Integer `spline` arguments run 0=Nearest .. 7, and `bound` arguments run
+0=Zero,1=Replicate,2=DCT1,3=DCT2,4=DST1,5=DST2,6=DFT,7=NoCheck. The `Spline`
+and `Bound` enums that document these, plus the argument-normalisation
+helpers built on them, live in the separate, dependency-free
+[`fastfields-helpers`](https://github.com/fastfields/fastfields-helpers)
+package rather than here -- this package (`fastfields.dlpack`) takes plain
+integers and does not depend on it.
