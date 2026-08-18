@@ -6,6 +6,7 @@ wrapper (numpy/cupy/torch/auto) sits on.
 
 ```
 … ─ lib ─ dlpack ← (you are here) ─ {numpy,cupy,torch} ─ fastfields
+fastfields-helpers (independent sibling, no dependency either way)
 ```
 
 - Submodule `_fastfields_lib -> fastfields-lib` (symlink in dev; real submodule
@@ -20,9 +21,15 @@ wrapper (numpy/cupy/torch/auto) sits on.
 - Exposes the same operation families as `fastfields-lib`: distance transforms &
   point-to-spline/mesh distance, posdef (compact-symmetric) linear algebra,
   resampling (`resample`/`restriction`/`spline_coeff`), pushpull, regularisers.
-- Enum helpers `ff.Spline` (0=Nearest … 7) and `ff.Bound`
-  (0=Zero,1=Replicate,2=DCT1,3=DCT2,4=DST1,5=DST2,6=DFT,7=NoCheck) document the
-  integer `spline`/`bound` arguments.
+- Integer `spline` arguments run 0=Nearest … 7, and `bound` arguments run
+  0=Zero,1=Replicate,2=DCT1,3=DCT2,4=DST1,5=DST2,6=DFT,7=NoCheck. The `Spline`
+  / `Bound` enums that document these values, and the pure-Python argument
+  normalisers built on them, **used to live here** (`fastfields/dlpack/
+  _helpers.py`) but were extracted to the separate, dependency-free
+  `fastfields-helpers` package so a one-line Python fix ships without a
+  compiled-wheel release cycle. **This package takes plain integers and has
+  no dependency on `fastfields-helpers`** — they are independent siblings,
+  not a layering. Do not re-add that import here.
 
 ## Layout
 - `src/ext.cpp` — the nanobind extension source (builds as

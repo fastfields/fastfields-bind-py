@@ -230,21 +230,6 @@ flow_subdiag_ = _core.flow_subdiag_
 flow_addkernel_ = _core.flow_addkernel_
 flow_subkernel_ = _core.flow_subkernel_
 
-# Shared enums + pure-Python argument-normalisation helpers, used by every
-# wrapper (numpy/torch/cupy) so the resample/spline-coeff argument handling
-# lives in one place. See ``fastfields.dlpack._helpers``.
-from ._helpers import (  # noqa: E402
-    Bound,
-    Spline,
-    anchor_scale_shift,
-    as_bound,
-    as_spline,
-    check_ndim,
-    infer_ndim,
-    normalize_shape,
-    resolve_out_spatial,
-)
-
 __all__ = [
     "__version__",
     "backend",
@@ -302,14 +287,4 @@ __all__ = [
     "flow_subdiag_",
     "flow_addkernel_",
     "flow_subkernel_",
-    "Spline",
-    "Bound",
-    # shared argument-normalisation helpers (fastfields.dlpack._helpers)
-    "as_spline",
-    "as_bound",
-    "normalize_shape",
-    "infer_ndim",
-    "check_ndim",
-    "resolve_out_spatial",
-    "anchor_scale_shift",
 ]
