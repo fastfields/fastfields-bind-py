@@ -44,14 +44,14 @@
 
 // All five public headers share the FF_LIB_BOUND_SPLINE_T guard, so they
 // co-include cleanly and provide the correctly-namespaced ff:: declarations.
-#include "distance.h"   // ff::dt_euclidean / dt_l1 / dt_spline_* / dt_mesh
-#include "posdef.h"     // ff::sym_matvec / sym_solve / sym_invert / ...
-#include "resize.h"     // ff::resample  + dlpack.h (DLTensor)
-#include "restrict.h"   // ff::restriction
-#include "splinc.h"     // ff::spline_coeff
-#include "pushpull.h"   // ff::pull / push / count / grad
-#include "reg_field.h"  // ff::field_matvec / field_diag
-#include "reg_flow.h"   // ff::flow_matvec / flow_diag
+#include "fastfields/api/distance.h"   // ff::dt_euclidean / dt_l1 / dt_spline_* / dt_mesh
+#include "fastfields/api/posdef.h"     // ff::sym_matvec / sym_solve / sym_invert / ...
+#include "fastfields/api/resize.h"     // ff::resample  + dlpack.h (DLTensor)
+#include "fastfields/api/restrict.h"   // ff::restriction
+#include "fastfields/api/splinc.h"     // ff::spline_coeff
+#include "fastfields/api/pushpull.h"   // ff::pull / push / count / grad
+#include "fastfields/api/reg_field.h"  // ff::field_matvec / field_diag
+#include "fastfields/api/reg_flow.h"   // ff::flow_matvec / flow_diag
 
 namespace nb = nanobind;
 using namespace nb::literals;
