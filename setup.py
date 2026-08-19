@@ -37,6 +37,10 @@ from setuptools.command.build_ext import build_ext
 HERE = os.path.dirname(os.path.abspath(__file__))
 FASTFIELDS_DIR = os.path.join(HERE, "_fastfields_lib")
 FASTFIELDS_BUILD = os.path.join(FASTFIELDS_DIR, "build")
+# Public headers moved under <tree>/include/ when the six fastfields repos were
+# consolidated into fastfields-lib; the hub's own headers are now reached as
+# "fastfields/api/<name>.h" (see src/ext.cpp).
+FASTFIELDS_INCLUDE = os.path.join(FASTFIELDS_DIR, "include")
 PKG_DIR = os.path.join(HERE, "fastfields", "dlpack")
 PKG_LIB_DIR = os.path.join(PKG_DIR, "lib")
 
@@ -156,7 +160,7 @@ class BuildExt(build_ext):
             nb["include"],
             nb["robin_map"],
             sysconfig.get_path("include"),
-            FASTFIELDS_DIR,
+            FASTFIELDS_INCLUDE,
         ]
         sources = list(ext.sources) + [nb["combined_src"]]
 
